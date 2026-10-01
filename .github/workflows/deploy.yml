@@ -24,9 +24,11 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - uses: actions/configure-pages@v5
       - name: Build
         env:
           BASE_PATH: '/${{ github.event.repository.name }}'
+          PUBLIC_REALTIME_SERVER: 'https://tiles-realtime.oliverdelange.workers.dev'
         run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -14,10 +14,13 @@ npm run dev
 Production builds respect `BASE_PATH`, which lets GitHub Pages serve the game from `/tiles/`:
 
 ```sh
-BASE_PATH=/tiles npm run build
+BASE_PATH=/tiles \
+PUBLIC_REALTIME_SERVER=https://tiles-realtime.oliverdelange.workers.dev \
+npm run build
 ```
 
-The hosted client currently defaults to the existing Tile Rush Cloudflare Worker so online games continue to work during the repository move. Deploy `worker/` and update `PRODUCTION_SERVER` in `src/game/index.ts` when the new Worker is ready.
+The production client defaults to `https://tiles-realtime.oliverdelange.workers.dev`.
+Set `PUBLIC_REALTIME_SERVER` at build time to use a different Cloudflare Worker.
 
 ## Realtime worker
 
@@ -28,6 +31,7 @@ npm run dev
 ```
 
 Deployment requires `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` repository secrets.
+The Worker accepts browser connections from `oliverdelange.co.uk` and its `www` host.
 
 ## Native nearby play
 

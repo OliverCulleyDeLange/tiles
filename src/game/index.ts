@@ -18,7 +18,8 @@ import { LocalRoomHost } from './local-room';
 import { NearbyConnections, isNativeNearby, type NearbyEndpoint, type NearbyVerification } from './nearby';
 import { gunzipSync } from 'fflate';
 
-const PRODUCTION_SERVER = 'https://tile-rush-realtime.oliverdelange.workers.dev';
+const PRODUCTION_SERVER = import.meta.env.PUBLIC_REALTIME_SERVER
+  || 'https://tiles-realtime.oliverdelange.workers.dev';
 const DICTIONARY_BASE = `${import.meta.env.BASE_URL.replace(/\/?$/, '/')}dictionaries`;
 const TILE = 48;
 const MIN_SCALE = 0.35;
