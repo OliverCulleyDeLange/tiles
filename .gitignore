@@ -1,0 +1,11 @@
+.DS_Store
+.idea/
+node_modules/
+.astro/
+dist/
+native-dist/
+.wrangler/
+*.log
+.env
+.env.local
+.env.*.local

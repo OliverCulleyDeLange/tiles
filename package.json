@@ -1,0 +1,28 @@
+{
+  "name": "tiles",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "check": "astro check",
+    "preview": "astro preview",
+    "native:prepare": "npm run build && node scripts/prepare-native.mjs && cap copy",
+    "native:ios": "npm run native:prepare && cap open ios",
+    "native:android": "npm run native:prepare && cap open android",
+    "worker:check": "npm --prefix worker run check"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/cli": "^8.5.2",
+    "@capacitor/core": "^8.5.2",
+    "@capacitor/ios": "^8.5.2",
+    "astro": "^6.2.1",
+    "fflate": "^0.8.3"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.10",
+    "typescript": "^5.9.3"
+  }
+}

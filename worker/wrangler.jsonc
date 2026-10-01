@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tiles-realtime",
+  "account_id": "e07409ca802c44c917ffee7a4a97af1b",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "observability": { "enabled": true, "logs": { "invocation_logs": false } },
+  "durable_objects": {
+    "bindings": [{ "name": "ROOMS", "class_name": "TilesRoom" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TilesRoom"] }]
+}
+
