@@ -10,7 +10,7 @@
 	<string>Location permission lets iOS establish high-speed peer-to-peer Wi-Fi connections; Tiles does not store your location.</string>
 	<key>NSBonjourServices</key>
 	<array>
-		<string>_6113A9264E25._tcp</string>
+		<string>_E13EA68AED3A._tcp</string>
 	</array>
   <key>CAPACITOR_DEBUG</key>
 	<string>$(CAPACITOR_DEBUG)</string>
