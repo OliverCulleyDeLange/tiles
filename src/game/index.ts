@@ -62,6 +62,11 @@ export function createTiles(root: HTMLElement): void {
   const rack = root.querySelector<HTMLElement>('[data-rack]')!;
   const rackWrap = root.querySelector<HTMLElement>('.rack-wrap')!;
   const dump = root.querySelector<HTMLButtonElement>('[data-dump]')!;
+  const gameMenuOpen = root.querySelector<HTMLButtonElement>('[data-game-menu-open]')!;
+  const gameMenu = root.querySelector<HTMLDialogElement>('[data-game-menu]')!;
+  const gameMenuClose = root.querySelector<HTMLButtonElement>('[data-game-menu-close]')!;
+  const resetBoard = root.querySelector<HTMLButtonElement>('[data-reset-board]')!;
+  const goHome = root.querySelector<HTMLButtonElement>('[data-go-home]')!;
   const bunch = root.querySelector<HTMLElement>('[data-bunch]')!;
   const peel = root.querySelector<HTMLElement>('[data-peel]')!;
   const players = root.querySelector<HTMLElement>('[data-players]')!;
@@ -88,6 +93,9 @@ export function createTiles(root: HTMLElement): void {
   const nearbyClose = root.querySelector<HTMLButtonElement>('[data-nearby-close]')!;
   const updateNotice = root.querySelector<HTMLElement>('[data-update-notice]')!;
   const updateNow = root.querySelector<HTMLButtonElement>('[data-update-now]')!;
+  const connectionNotice = root.querySelector<HTMLElement>('[data-connection-notice]')!;
+  const connectionMessage = root.querySelector<HTMLElement>('[data-connection-message]')!;
+  const retryConnection = root.querySelector<HTMLButtonElement>('[data-retry-connection]')!;
 
   const params = new URLSearchParams(location.search);
   let roomName = sanitizeRoom(params.get('room'));
@@ -104,6 +112,7 @@ export function createTiles(root: HTMLElement): void {
   let socket: WebSocket | null = null;
   let onlineName = '';
   let onlineReconnectEnabled = false;
+  let connectionMode: 'online' | 'nearby-host' | 'nearby-join' | null = null;
   let reconnectAttempt = 0;
   let reconnectTimer: number | null = null;
   let localHost: LocalRoomHost | null = null;
@@ -158,6 +167,19 @@ export function createTiles(root: HTMLElement): void {
     else if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
   }
 
+  function connectionRestored(): void {
+    root.dataset.connection = 'online';
+    connectionNotice.hidden = true;
+    retryConnection.disabled = false;
+  }
+
+  function connectionLost(message: string): void {
+    root.dataset.connection = 'offline';
+    connectionMessage.textContent = message;
+    connectionNotice.hidden = false;
+    retryConnection.disabled = false;
+  }
+
   async function loadDictionary(dictionary: DictionaryId): Promise<void> {
     if (loadedDictionary === dictionary || loadingDictionary === dictionary) return;
     loadingDictionary = dictionary;
@@ -190,7 +212,7 @@ export function createTiles(root: HTMLElement): void {
     if (message.t === 'welcome') {
       myId = message.id;
       if (message.resumeToken) localStorage.setItem(sessionKey(), message.resumeToken);
-      root.dataset.connection = 'online';
+      connectionRestored();
       reconnectAttempt = 0;
       updateRoom(message.room);
     } else if (message.t === 'room') updateRoom(message.room);
@@ -215,6 +237,7 @@ export function createTiles(root: HTMLElement): void {
 
   function connectOnline(name: string): void {
     onlineName = name;
+    connectionMode = 'online';
     onlineReconnectEnabled = true;
     if (reconnectTimer != null) window.clearTimeout(reconnectTimer);
     reconnectTimer = null;
@@ -236,7 +259,7 @@ export function createTiles(root: HTMLElement): void {
     });
     connection.addEventListener('close', () => {
       if (socket !== connection || !onlineReconnectEnabled) return;
-      root.dataset.connection = 'offline';
+      connectionLost('Connection lost. Retrying automatically…');
       scheduleReconnect();
     });
   }
@@ -248,7 +271,6 @@ export function createTiles(root: HTMLElement): void {
   function scheduleReconnect(): void {
     if (reconnectTimer != null || !onlineReconnectEnabled || !onlineName) return;
     const delay = Math.min(10_000, 500 * 2 ** Math.min(reconnectAttempt++, 5));
-    show('Connection lost. Reconnecting…', 'plain');
     reconnectTimer = window.setTimeout(() => connectOnline(onlineName), delay);
   }
 
@@ -329,6 +351,7 @@ export function createTiles(root: HTMLElement): void {
       if (!nearbyDialog.open) nearbyDialog.showModal();
     });
     await NearbyConnections.addListener('connected', endpoint => {
+      connectionRestored();
       nearbyVerification.hidden = true;
       pendingVerification = null;
       if (localHost) {
@@ -341,13 +364,18 @@ export function createTiles(root: HTMLElement): void {
         void NearbyConnections.send({ endpointIds: [endpoint.endpointId], payload: JSON.stringify(message) });
       };
       if (nearbyDialog.open) nearbyDialog.close();
-      send({ t: 'hello', v: PROTOCOL_VERSION, name: nearbyName });
+      const resumeToken = localStorage.getItem(sessionKey()) ?? undefined;
+      send({ t: 'hello', v: PROTOCOL_VERSION, name: nearbyName, resumeToken });
     });
     await NearbyConnections.addListener('disconnected', endpoint => {
-      if (localHost) localHost.disconnect(endpoint.endpointId);
+      if (localHost) {
+        localHost.disconnect(endpoint.endpointId);
+        show(`${endpoint.name} disconnected. They can rejoin nearby.`, 'bad');
+      }
       else if (nearbyHostId === endpoint.endpointId) {
-        show('The nearby host disconnected.', 'bad');
-        root.dataset.connection = 'offline';
+        nearbyHostId = null;
+        transportSend = null;
+        connectionLost('The nearby host disconnected.');
       }
     });
     await NearbyConnections.addListener('payloadReceived', event => {
@@ -364,6 +392,8 @@ export function createTiles(root: HTMLElement): void {
     try {
       await requestNearbyPermissions();
       await NearbyConnections.startAdvertising({ name });
+      connectionMode = 'nearby-host';
+      connectionRestored();
       onlineReconnectEnabled = false;
       socket?.close();
       roomName = 'nearby';
@@ -388,10 +418,13 @@ export function createTiles(root: HTMLElement): void {
     try {
       await requestNearbyPermissions();
       await NearbyConnections.startDiscovery({ name });
+      connectionMode = 'nearby-join';
       onlineReconnectEnabled = false;
       socket?.close();
       localHost = null;
       nearbyHostId = null;
+      roomName = 'nearby';
+      roomLabels.forEach(label => { label.textContent = 'Nearby'; });
       onlineInvite.hidden = true;
       lobbyHelp.textContent = 'This game is connected directly to the nearby host—no internet or invite link needed.';
       nearbyEndpointMap.clear();
@@ -416,13 +449,14 @@ export function createTiles(root: HTMLElement): void {
       `<li><span class="presence ${player.connected === false ? 'is-offline' : ''}" aria-hidden="true"></span><strong>${escapeHtml(player.name)}</strong>${player.connected === false ? '<em>Reconnecting</em>' : player.id === next.hostId ? '<em>Host</em>' : ''}</li>`
     ).join('');
     players.innerHTML = next.players.map((player, index) =>
-      `<li><span class="player-chip ${player.id === myId ? 'is-you' : ''} ${player.eliminated ? 'is-out' : ''}" style="--owner-color:${ownerColor(index)}"><i></i><span>${escapeHtml(player.name)}</span><b>${player.eliminated ? 'OUT' : `${player.tilesLeft} loose`}</b></span></li>`
+      `<li><span class="player-chip ${player.id === myId ? 'is-you' : ''} ${player.eliminated ? 'is-out' : ''} ${player.connected === false ? 'is-offline' : ''}" style="--owner-color:${ownerColor(index)}"><i></i><span>${escapeHtml(player.name)}</span><b>${player.connected === false ? 'OFFLINE' : player.eliminated ? 'OUT' : `${player.tilesLeft} loose`}</b></span></li>`
     ).join('');
     start.hidden = myId !== next.hostId;
     start.disabled = next.players.length < 2;
     start.textContent = next.players.length < 2 ? 'Waiting for an opponent…' : `Start with ${next.players.length} players`;
     dictionarySelect.value = dictionary;
     dictionarySelect.disabled = myId !== next.hostId || next.phase !== 'lobby';
+    resetBoard.disabled = next.phase !== 'playing';
     void loadDictionary(dictionary);
 
     nameGate.hidden = true;
@@ -619,6 +653,7 @@ export function createTiles(root: HTMLElement): void {
       return;
     }
     const rect = board.getBoundingClientRect();
+    let layoutChanged = false;
     if (tile && pointInRect(event.clientX, event.clientY, rect)) {
       const world = screenToWorld(event.clientX, event.clientY);
       const x = Math.round(world.x / TILE);
@@ -647,19 +682,58 @@ export function createTiles(root: HTMLElement): void {
         selectedIds.clear();
         moving.forEach(id => selectedIds.add(id));
         selectedId = tile.id;
+        layoutChanged = true;
       }
+    } else if (tile && !interaction.wasPlaced && pointInRect(event.clientX, event.clientY, rack.getBoundingClientRect())) {
+      reorderRack(tile.id, event.clientX, event.clientY);
     } else if (tile && interaction.dragIds.length) {
       for (const id of interaction.dragIds) {
         const value = tiles.find(candidate => candidate.id === id);
         if (value) { value.x = null; value.y = null; }
       }
+      if (pointInRect(event.clientX, event.clientY, rackWrap.getBoundingClientRect())) {
+        reorderRack(tile.id, event.clientX, event.clientY);
+      }
       selectedIds.clear();
       selectedId = null;
+      layoutChanged = interaction.wasPlaced;
     }
     dragging = null;
     interaction.ghosts.forEach(ghost => ghost.element.remove());
-    send({ t: 'layout', board: boardPayload() });
+    if (layoutChanged) send({ t: 'layout', board: boardPayload() });
     renderTiles();
+  }
+
+  function reorderRack(tileId: string, clientX: number, clientY: number): void {
+    const loose = tiles.filter(value => value.x == null || value.y == null);
+    const tile = loose.find(value => value.id === tileId);
+    if (!tile) return;
+    const remaining = loose.filter(value => value.id !== tileId);
+    const elements = [...rack.querySelectorAll<HTMLElement>('.letter-tile')]
+      .filter(element => element.dataset.id !== tileId);
+    let insertion = remaining.length;
+    if (elements.length) {
+      const rows: Array<{ centerY: number; entries: Array<{ id: string; centerX: number }> }> = [];
+      for (const element of elements) {
+        const rect = element.getBoundingClientRect();
+        const centerY = rect.top + rect.height / 2;
+        let row = rows.find(value => Math.abs(value.centerY - centerY) < rect.height / 2);
+        if (!row) { row = { centerY, entries: [] }; rows.push(row); }
+        row.entries.push({ id: element.dataset.id!, centerX: rect.left + rect.width / 2 });
+      }
+      rows.sort((a, b) => a.centerY - b.centerY);
+      const row = rows.reduce((closest, candidate) =>
+        Math.abs(candidate.centerY - clientY) < Math.abs(closest.centerY - clientY) ? candidate : closest
+      );
+      row.entries.sort((a, b) => a.centerX - b.centerX);
+      const before = row.entries.find(entry => clientX < entry.centerX);
+      const anchorId = before?.id ?? row.entries.at(-1)?.id;
+      const anchorIndex = remaining.findIndex(value => value.id === anchorId);
+      insertion = before ? anchorIndex : anchorIndex + 1;
+    }
+    remaining.splice(Math.max(0, insertion), 0, tile);
+    const placed = tiles.filter(value => value.x != null && value.y != null);
+    tiles = [...placed, ...remaining];
   }
 
   function toggleSelection(id: string): void {
@@ -1048,6 +1122,43 @@ export function createTiles(root: HTMLElement): void {
 
   dump.addEventListener('click', () => {
     if (selectedId) send({ t: 'dump', tileId: selectedId });
+  });
+  gameMenuOpen.addEventListener('click', () => gameMenu.showModal());
+  gameMenuClose.addEventListener('click', () => gameMenu.close());
+  resetBoard.addEventListener('click', () => {
+    if (state?.phase !== 'playing') return;
+    for (const tile of tiles) { tile.x = null; tile.y = null; }
+    selectedId = null;
+    selectedIds.clear();
+    send({ t: 'layout', board: [] });
+    renderTiles();
+    gameMenu.close();
+    show('Your tiles are back in the rack.', 'good');
+  });
+  goHome.addEventListener('click', async () => {
+    connectionMode = null;
+    onlineReconnectEnabled = false;
+    if (reconnectTimer != null) window.clearTimeout(reconnectTimer);
+    socket?.close();
+    transportSend = null;
+    if (isNativeNearby()) await NearbyConnections.stop().catch(() => undefined);
+    location.assign(import.meta.env.BASE_URL);
+  });
+  retryConnection.addEventListener('click', async () => {
+    retryConnection.disabled = true;
+    if (connectionMode === 'online' && onlineName) {
+      connectionMessage.textContent = 'Reconnecting…';
+      if (reconnectTimer != null) window.clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+      connectOnline(onlineName);
+      return;
+    }
+    if (connectionMode === 'nearby-join') {
+      connectionMessage.textContent = 'Searching for the nearby host…';
+      await NearbyConnections.stop().catch(() => undefined);
+      await joinNearby();
+      retryConnection.disabled = false;
+    }
   });
   reviewAccept.addEventListener('click', () => send({ t: 'review', rotten: false }));
   reviewRotten.addEventListener('click', () => send({ t: 'review', rotten: true }));

@@ -16,6 +16,8 @@ import {
 interface LocalPlayer {
   id: string;
   name: string;
+  resumeToken: string;
+  connected: boolean;
   hand: Tile[];
   board: PlacedTile[];
   eliminated: boolean;
@@ -44,7 +46,7 @@ export class LocalRoomHost {
   constructor(private readonly deliver: (peerId: string, message: ServerMessage) => void) {}
 
   receive(peerId: string, message: ClientMessage): void {
-    if (message.t === 'hello') return this.join(peerId, message.name);
+    if (message.t === 'hello') return this.join(peerId, message.name, message.resumeToken);
     const player = this.players.find(value => value.id === peerId);
     if (!player) return;
     if (message.t === 'dictionary') this.setDictionary(peerId, message.dictionary);
@@ -59,15 +61,33 @@ export class LocalRoomHost {
   disconnect(peerId: string): void {
     const index = this.players.findIndex(value => value.id === peerId);
     if (index < 0) return;
-    const [player] = this.players.splice(index, 1);
-    if (this.phase !== 'lobby') this.bag.push(...player.hand);
-    shuffle(this.bag);
+    if (this.phase !== 'lobby') {
+      this.players[index].connected = false;
+      this.broadcastRoom();
+      return;
+    }
+    this.players.splice(index, 1);
     if (this.hostId === peerId) this.hostId = this.players[0]?.id ?? '';
     this.broadcastRoom();
   }
 
-  private join(peerId: string, rawName: string): void {
+  private join(peerId: string, rawName: string, resumeToken?: string): void {
     if (this.players.some(player => player.id === peerId)) return;
+    const resuming = resumeToken
+      ? this.players.find(player => player.resumeToken === resumeToken && !player.connected)
+      : undefined;
+    if (resuming) {
+      const previousId = resuming.id;
+      resuming.id = peerId;
+      resuming.connected = true;
+      if (this.hostId === previousId) this.hostId = peerId;
+      if (this.claimantId === previousId) this.claimantId = peerId;
+      if (this.winnerId === previousId) this.winnerId = peerId;
+      this.deliver(peerId, { t: 'welcome', id: peerId, resumeToken: resuming.resumeToken, room: this.snapshot() });
+      this.deliver(peerId, { t: 'hand', tiles: resuming.hand, replace: true });
+      this.broadcastRoom(peerId);
+      return;
+    }
     if (this.phase !== 'lobby') return this.deliver(peerId, { t: 'error', message: 'A game is already in progress.' });
     if (this.players.length >= MAX_PLAYERS) return this.deliver(peerId, { t: 'error', message: 'This nearby game is full.' });
     const name = sanitizeName(rawName);
@@ -76,9 +96,10 @@ export class LocalRoomHost {
     let unique = name;
     let suffix = 2;
     while (existing.has(unique.toLowerCase())) unique = `${name.slice(0, 15)} ${suffix++}`;
-    this.players.push({ id: peerId, name: unique, hand: [], board: [], eliminated: false, voted: false });
+    const token = crypto.randomUUID();
+    this.players.push({ id: peerId, name: unique, resumeToken: token, connected: true, hand: [], board: [], eliminated: false, voted: false });
     if (!this.hostId) this.hostId = peerId;
-    this.deliver(peerId, { t: 'welcome', id: peerId, room: this.snapshot() });
+    this.deliver(peerId, { t: 'welcome', id: peerId, resumeToken: token, room: this.snapshot() });
     this.broadcastRoom(peerId);
   }
 
@@ -100,7 +121,7 @@ export class LocalRoomHost {
       player.board = [];
       player.eliminated = false;
       player.voted = false;
-      this.deliver(player.id, { t: 'hand', tiles: player.hand, replace: true });
+      if (player.connected) this.deliver(player.id, { t: 'hand', tiles: player.hand, replace: true });
     }
     this.broadcast({ t: 'toast', text: 'SPLIT! Build your grid.', tone: 'good' });
     this.broadcastRoom();
@@ -137,7 +158,7 @@ export class LocalRoomHost {
       const drawn = this.bag.pop();
       if (!drawn) continue;
       candidate.hand.push(drawn);
-      this.deliver(candidate.id, { t: 'hand', tiles: [drawn], replace: false });
+      if (candidate.connected) this.deliver(candidate.id, { t: 'hand', tiles: [drawn], replace: false });
     }
     this.broadcast({ t: 'toast', text: `${player.name} peeled!`, tone: 'plain' });
     this.broadcastRoom();
@@ -191,7 +212,8 @@ export class LocalRoomHost {
     const areas = createPlayerAreas(this.players.length);
     const players: PlayerSummary[] = this.players.map((player, index) => ({
       id: player.id, name: player.name, tilesLeft: player.hand.length - player.board.length,
-      tiles: player.hand, board: player.board, area: areas[index], eliminated: player.eliminated || undefined,
+      tiles: player.hand, board: player.board, area: areas[index], connected: player.connected ? undefined : false,
+      eliminated: player.eliminated || undefined,
     }));
     return {
       phase: this.phase, hostId: this.hostId, players, bunch: this.bag.length, peel: this.peel,
@@ -200,10 +222,12 @@ export class LocalRoomHost {
     };
   }
 
-  private broadcast(message: ServerMessage): void { this.players.forEach(player => this.deliver(player.id, message)); }
+  private broadcast(message: ServerMessage): void {
+    this.players.forEach(player => { if (player.connected) this.deliver(player.id, message); });
+  }
   private broadcastRoom(except?: string): void {
     const message: ServerMessage = { t: 'room', room: this.snapshot() };
-    this.players.forEach(player => { if (player.id !== except) this.deliver(player.id, message); });
+    this.players.forEach(player => { if (player.connected && player.id !== except) this.deliver(player.id, message); });
   }
 }
 
