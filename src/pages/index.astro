@@ -49,9 +49,22 @@
           <option value="scowl-gb">SCOWL · British English</option>
         </select>
       </label>
+      <div class="lobby-invite" data-online-invite>
+        <div class="qr-frame">
+          <canvas data-room-qr width="164" height="164" role="img" aria-label="QR code for this private game link"></canvas>
+        </div>
+        <div class="invite-copy">
+          <p class="eyebrow">Invite players</p>
+          <h2>Scan to join</h2>
+          <p>Point another phone’s camera at the code.</p>
+          <div class="invite-actions">
+            <button class="copy-action" type="button" data-copy-link>Copy link</button>
+            <button class="share-action" type="button" data-share>Share</button>
+          </div>
+        </div>
+      </div>
       <div class="lobby-actions">
         <button class="primary-action" type="button" data-start disabled>Waiting for an opponent…</button>
-        <button class="share-action" type="button" data-share>Share game</button>
       </div>
       <p class="lobby-help">Share the private link to invite up to seven other players. The host chooses the dictionary for everyone.</p>
     </section>
@@ -160,8 +173,17 @@
   .dictionary-picker select:disabled { opacity: .7; }
   .primary-action { width: 100%; }
   .primary-action:disabled { background: #ded8bd; color: #77705b; box-shadow: none; cursor: default; }
-  .lobby-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .65rem; }
-  .share-action { min-height: 3.2rem; padding: .7rem 1.1rem; border: 2px solid var(--tr-ink); border-radius: 10px; background: #fff; color: var(--tr-ink); box-shadow: 3px 3px 0 var(--tr-ink); font: 800 1rem/1 inherit; cursor: pointer; }
+  .lobby-invite { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 1rem; align-items: center; margin-bottom: 1rem; padding: .85rem; border: 2px solid var(--tr-ink); border-radius: 14px; background: #fff; }
+  .lobby-invite[hidden] { display: none; }
+  .qr-frame { padding: .35rem; border: 2px solid var(--tr-ink); border-radius: 10px; background: #fffdf3; }
+  .qr-frame canvas { display: block; width: 132px; height: 132px; }
+  .invite-copy h2 { margin: 0; font: 900 1.75rem/1 Georgia, serif; letter-spacing: -.03em; }
+  .invite-copy > p:not(.eyebrow) { margin: .5rem 0 .8rem; color: #6b6044; font-size: .88rem; line-height: 1.35; }
+  .invite-actions { display: grid; grid-template-columns: 1fr 1fr; gap: .55rem; }
+  .copy-action, .share-action { min-height: 2.8rem; padding: .6rem .75rem; border: 2px solid var(--tr-ink); border-radius: 9px; color: var(--tr-ink); box-shadow: 2px 2px 0 var(--tr-ink); font: 800 .9rem/1 inherit; cursor: pointer; }
+  .copy-action { background: var(--tr-yellow); }
+  .share-action { background: #fff; }
+  .lobby-actions { display: grid; gap: .65rem; }
   .game-shell { position: fixed; inset: 0; width: 100%; height: 100vh; height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: var(--tr-cream); overflow: hidden; }
   .game-shell[hidden], .entry-card[hidden], .lobby-card[hidden] { display: none; }
   .game-bar { min-width: 0; min-height: 48px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: .55rem; padding: max(.35rem, env(safe-area-inset-top)) max(.6rem, env(safe-area-inset-right)) .35rem max(.6rem, env(safe-area-inset-left)); border-bottom: 2px solid var(--tr-ink); background: var(--tr-yellow); }
@@ -241,7 +263,12 @@
     .lobby-card header { align-items: flex-start; }
     .roster { margin: 1.25rem 0; }
     .dictionary-picker { grid-template-columns: 1fr; gap: .35rem; }
-    .lobby-actions { grid-template-columns: 1fr; }
+    .lobby-invite { grid-template-columns: 112px minmax(0, 1fr); gap: .8rem; padding: .7rem; }
+    .qr-frame canvas { width: 96px; height: 96px; }
+    .invite-copy h2 { font-size: 1.45rem; }
+    .invite-copy > p:not(.eyebrow) { margin: .35rem 0 .6rem; }
+    .invite-actions { grid-template-columns: 1fr; gap: .4rem; }
+    .copy-action, .share-action { min-height: 2.5rem; }
     .game-bar { grid-template-columns: minmax(0, 1fr) auto; }
     .compact-brand { display: none; }
     .top-players { justify-content: flex-start; }

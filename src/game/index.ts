@@ -17,6 +17,7 @@ import {
 import { LocalRoomHost } from './local-room';
 import { NearbyConnections, isNativeNearby, type NearbyEndpoint, type NearbyVerification } from './nearby';
 import { gunzipSync } from 'fflate';
+import QRCode from 'qrcode';
 
 const PRODUCTION_SERVER = import.meta.env.PUBLIC_REALTIME_SERVER
   || 'https://tiles-realtime.oliverdelange.workers.dev';
@@ -48,6 +49,9 @@ export function createTiles(root: HTMLElement): void {
   const dictionarySelect = root.querySelector<HTMLSelectElement>('[data-dictionary]')!;
   const roomLabels = root.querySelectorAll<HTMLElement>('[data-room-label]');
   const start = root.querySelector<HTMLButtonElement>('[data-start]')!;
+  const onlineInvite = root.querySelector<HTMLElement>('[data-online-invite]')!;
+  const roomQr = root.querySelector<HTMLCanvasElement>('[data-room-qr]')!;
+  const copyLink = root.querySelector<HTMLButtonElement>('[data-copy-link]')!;
   const share = root.querySelector<HTMLButtonElement>('[data-share]')!;
   const lobbyHelp = root.querySelector<HTMLElement>('.lobby-help')!;
   const board = root.querySelector<HTMLElement>('[data-board]')!;
@@ -200,7 +204,8 @@ export function createTiles(root: HTMLElement): void {
 
   function connectOnline(name: string): void {
     transportSend = null;
-    share.hidden = false;
+    onlineInvite.hidden = false;
+    void renderInviteCode();
     lobbyHelp.textContent = 'Share the private link to invite up to seven other players. The host chooses the dictionary for everyone.';
     socket = new WebSocket(`${server}/rooms/${encodeURIComponent(roomName)}`);
     socket.addEventListener('open', () => send({ t: 'hello', v: PROTOCOL_VERSION, name }));
@@ -214,6 +219,29 @@ export function createTiles(root: HTMLElement): void {
       show('Connection lost. Refresh to rejoin.', 'bad');
       root.dataset.connection = 'offline';
     });
+  }
+
+  async function renderInviteCode(): Promise<void> {
+    try {
+      await QRCode.toCanvas(roomQr, location.href, {
+        width: 164,
+        margin: 1,
+        errorCorrectionLevel: 'M',
+        color: { dark: '#17150f', light: '#fffdf3' },
+      });
+    } catch {
+      onlineInvite.hidden = true;
+      show('Could not create the invite QR code.', 'bad');
+    }
+  }
+
+  async function copyGameLink(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(location.href);
+      show('Game link copied', 'good');
+    } catch {
+      show('Could not copy this link', 'bad');
+    }
   }
 
   const nearbyEndpointMap = new Map<string, NearbyEndpoint>();
@@ -302,7 +330,7 @@ export function createTiles(root: HTMLElement): void {
       socket?.close();
       roomName = 'nearby';
       roomLabels.forEach(label => { label.textContent = 'Nearby'; });
-      share.hidden = true;
+      onlineInvite.hidden = true;
       lobbyHelp.textContent = 'Friends can join from the nearby-play option. Keep Bluetooth and Wi-Fi enabled.';
       localHost = new LocalRoomHost((peerId, message) => {
         if (peerId === localPeerId) handleServerMessage(message);
@@ -325,7 +353,7 @@ export function createTiles(root: HTMLElement): void {
       socket?.close();
       localHost = null;
       nearbyHostId = null;
-      share.hidden = true;
+      onlineInvite.hidden = true;
       lobbyHelp.textContent = 'This game is connected directly to the nearby host—no internet or invite link needed.';
       nearbyEndpointMap.clear();
       nearbyTitle.textContent = 'Finding nearby games…';
@@ -859,6 +887,7 @@ export function createTiles(root: HTMLElement): void {
     if (dictionary === 'scowl-us' || dictionary === 'scowl-gb') send({ t: 'dictionary', dictionary });
   });
   start.addEventListener('click', () => send({ t: 'start' }));
+  copyLink.addEventListener('click', () => { void copyGameLink(); });
   share.addEventListener('click', async () => {
     const data = {
       title: 'Join my Tiles game',
@@ -867,18 +896,10 @@ export function createTiles(root: HTMLElement): void {
     };
     try {
       if (navigator.share) await navigator.share(data);
-      else {
-        await navigator.clipboard.writeText(location.href);
-        show('Game link copied', 'good');
-      }
+      else await copyGameLink();
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
-      try {
-        await navigator.clipboard.writeText(location.href);
-        show('Game link copied', 'good');
-      } catch {
-        show('Could not share this link', 'bad');
-      }
+      await copyGameLink();
     }
   });
 
