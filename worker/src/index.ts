@@ -57,6 +57,8 @@ interface Session {
 interface PlayerState {
   id: string;
   name: string;
+  resumeToken?: string;
+  connected?: boolean;
   hand: Tile[];
   board: PlacedTile[];
   area?: PlayerArea;
@@ -161,15 +163,41 @@ export class TilesRoom extends DurableObject<Env> {
     const name = sanitizeName(message.name);
     if (!name) return this.send(ws, { t: 'error', message: 'Enter a player name.' });
     const game = await this.load();
+    let resumeToken = validResumeToken(message.resumeToken) ? message.resumeToken : '';
+    const returning = resumeToken
+      ? game.players.find(player => player.resumeToken === resumeToken)
+      : game.players.find(player => !player.resumeToken && player.connected === false && player.name.toLowerCase() === name.toLowerCase());
+    if (returning) {
+      if (!resumeToken) {
+        resumeToken = crypto.randomUUID().replaceAll('-', '') + crypto.randomUUID().replaceAll('-', '');
+        returning.resumeToken = resumeToken;
+      }
+      session.id = returning.id;
+      session.name = returning.name;
+      session.joined = true;
+      returning.connected = true;
+      ws.serializeAttachment(session);
+      await this.save(game);
+      this.send(ws, { t: 'welcome', id: returning.id, resumeToken, room: this.snapshot(game) });
+      this.send(ws, { t: 'hand', tiles: returning.hand, replace: true });
+      this.broadcastRoom(game, ws);
+      for (const candidate of this.ctx.getWebSockets()) {
+        if (candidate !== ws && this.session(candidate)?.id === returning.id) {
+          try { candidate.close(1000, 'Session resumed elsewhere'); } catch {}
+        }
+      }
+      return;
+    }
     if (game.phase !== 'lobby') return this.send(ws, { t: 'error', message: 'A game is already in progress.' });
     if (game.players.length >= MAX_PLAYERS) return this.send(ws, { t: 'error', message: 'This room is full.' });
     session.name = this.uniqueName(name, game);
     session.joined = true;
     ws.serializeAttachment(session);
-    game.players.push({ id: session.id, name: session.name, hand: [], board: [], eliminated: false, voted: false });
+    const newResumeToken = crypto.randomUUID().replaceAll('-', '') + crypto.randomUUID().replaceAll('-', '');
+    game.players.push({ id: session.id, name: session.name, resumeToken: newResumeToken, connected: true, hand: [], board: [], eliminated: false, voted: false });
     if (!game.hostId) game.hostId = session.id;
     await this.save(game);
-    this.send(ws, { t: 'welcome', id: session.id, room: this.snapshot(game) });
+    this.send(ws, { t: 'welcome', id: session.id, resumeToken: newResumeToken, room: this.snapshot(game) });
     this.broadcastRoom(game, ws);
   }
 
@@ -332,45 +360,23 @@ export class TilesRoom extends DurableObject<Env> {
     this.budgets.delete(ws);
     const session = this.session(ws);
     if (!session?.joined) return;
+    const replacement = this.ctx.getWebSockets().some(candidate =>
+      candidate !== ws && this.session(candidate)?.joined && this.session(candidate)?.id === session.id
+    );
+    if (replacement) return;
     const game = await this.load();
-    const index = game.players.findIndex(value => value.id === session.id);
-    if (index < 0) return;
-    const [departed] = game.players.splice(index, 1);
-    if (game.phase === 'playing' || game.phase === 'review') {
-      game.bag.push(...departed.hand);
-      shuffle(game.bag);
-    }
-    if (!game.players.length) {
-      game.phase = 'lobby';
-      game.hostId = '';
-      game.bag = [];
-      game.peel = 0;
-      game.winnerId = undefined;
-      game.claimantId = undefined;
-      game.reviewBoard = undefined;
-      game.reviewEndsAt = undefined;
-      game.rottenCalled = false;
-    }
-    else if (game.hostId === session.id) game.hostId = game.players[0].id;
-    if (game.phase === 'review' && game.claimantId === session.id) {
-      game.phase = 'playing';
-      game.claimantId = undefined;
-      game.reviewBoard = undefined;
-      game.reviewEndsAt = undefined;
-    }
-    if ((game.phase === 'playing' || game.phase === 'review') && game.players.filter(value => !value.eliminated).length === 1) {
-      game.phase = 'finished';
-      game.winnerId = game.players.find(value => !value.eliminated)?.id;
-    }
+    const player = game.players.find(value => value.id === session.id);
+    if (!player) return;
+    player.connected = false;
     await this.save(game);
     this.broadcastRoom(game);
-    if (game.phase === 'finished') await this.ctx.storage.setAlarm(Date.now() + 7_000);
   }
 
   private snapshot(game: GameState): RoomSnapshot {
     const players: PlayerSummary[] = game.players.map(player => ({
       id: player.id,
       name: player.name,
+      connected: player.connected !== false,
       tilesLeft: player.hand.length - (player.board?.length ?? 0),
       tiles: player.hand,
       board: player.board ?? [],
@@ -443,6 +449,10 @@ export class TilesRoom extends DurableObject<Env> {
   private broadcastRoom(game: GameState, except?: WebSocket): void {
     this.broadcast({ t: 'room', room: this.snapshot(game) }, except);
   }
+}
+
+function validResumeToken(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 }
 
 function shuffledBag(): Tile[] {

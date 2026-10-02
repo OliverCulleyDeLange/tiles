@@ -100,6 +100,10 @@ export function createTiles(root: HTMLElement): void {
   nameInput.value = localStorage.getItem('tiles-name') ?? '';
 
   let socket: WebSocket | null = null;
+  let onlineName = '';
+  let onlineReconnectEnabled = false;
+  let reconnectAttempt = 0;
+  let reconnectTimer: number | null = null;
   let localHost: LocalRoomHost | null = null;
   let nearbyHostId: string | null = null;
   let pendingVerification: NearbyVerification | null = null;
@@ -182,13 +186,17 @@ export function createTiles(root: HTMLElement): void {
   function handleServerMessage(message: ServerMessage): void {
     if (message.t === 'welcome') {
       myId = message.id;
+      if (message.resumeToken) localStorage.setItem(sessionKey(), message.resumeToken);
+      root.dataset.connection = 'online';
+      reconnectAttempt = 0;
       updateRoom(message.room);
     } else if (message.t === 'room') updateRoom(message.room);
     else if (message.t === 'hand') {
       if (message.replace) {
         const previous = new Map(tiles.map(tile => [tile.id, tile]));
+        const restored = new Map((state?.players.find(player => player.id === myId)?.board ?? []).map(tile => [tile.id, tile]));
         tiles = message.tiles.map(tile => {
-          const placed = previous.get(tile.id);
+          const placed = previous.get(tile.id) ?? restored.get(tile.id);
           return { ...tile, x: placed?.x ?? null, y: placed?.y ?? null };
         });
       } else tiles.push(...message.tiles.map(tile => ({ ...tile, x: null, y: null })));
@@ -203,22 +211,42 @@ export function createTiles(root: HTMLElement): void {
   }
 
   function connectOnline(name: string): void {
+    onlineName = name;
+    onlineReconnectEnabled = true;
+    if (reconnectTimer != null) window.clearTimeout(reconnectTimer);
+    reconnectTimer = null;
     transportSend = null;
     onlineInvite.hidden = false;
     void renderInviteCode();
     lobbyHelp.textContent = 'Share the private link to invite up to seven other players. The host chooses the dictionary for everyone.';
-    socket = new WebSocket(`${server}/rooms/${encodeURIComponent(roomName)}`);
-    socket.addEventListener('open', () => send({ t: 'hello', v: PROTOCOL_VERSION, name }));
-    socket.addEventListener('message', event => {
+    const connection = new WebSocket(`${server}/rooms/${encodeURIComponent(roomName)}`);
+    socket = connection;
+    connection.addEventListener('open', () => {
+      const resumeToken = localStorage.getItem(sessionKey()) ?? undefined;
+      connection.send(JSON.stringify({ t: 'hello', v: PROTOCOL_VERSION, name, resumeToken } satisfies ClientMessage));
+    });
+    connection.addEventListener('message', event => {
       if (typeof event.data !== 'string') return;
       let message: ServerMessage;
       try { message = JSON.parse(event.data) as ServerMessage; } catch { return; }
       handleServerMessage(message);
     });
-    socket.addEventListener('close', () => {
-      show('Connection lost. Refresh to rejoin.', 'bad');
+    connection.addEventListener('close', () => {
+      if (socket !== connection || !onlineReconnectEnabled) return;
       root.dataset.connection = 'offline';
+      scheduleReconnect();
     });
+  }
+
+  function sessionKey(): string {
+    return `tiles-session:${roomName}`;
+  }
+
+  function scheduleReconnect(): void {
+    if (reconnectTimer != null || !onlineReconnectEnabled || !onlineName) return;
+    const delay = Math.min(10_000, 500 * 2 ** Math.min(reconnectAttempt++, 5));
+    show('Connection lost. Reconnecting…', 'plain');
+    reconnectTimer = window.setTimeout(() => connectOnline(onlineName), delay);
   }
 
   async function renderInviteCode(): Promise<void> {
@@ -327,6 +355,7 @@ export function createTiles(root: HTMLElement): void {
     try {
       await NearbyConnections.requestPermissions();
       await NearbyConnections.startAdvertising({ name });
+      onlineReconnectEnabled = false;
       socket?.close();
       roomName = 'nearby';
       roomLabels.forEach(label => { label.textContent = 'Nearby'; });
@@ -350,6 +379,7 @@ export function createTiles(root: HTMLElement): void {
     try {
       await NearbyConnections.requestPermissions();
       await NearbyConnections.startDiscovery({ name });
+      onlineReconnectEnabled = false;
       socket?.close();
       localHost = null;
       nearbyHostId = null;
@@ -374,7 +404,7 @@ export function createTiles(root: HTMLElement): void {
     bunch.textContent = String(next.bunch);
     peel.textContent = String(next.peel);
     roster.innerHTML = next.players.map(player =>
-      `<li><span class="presence" aria-hidden="true"></span><strong>${escapeHtml(player.name)}</strong>${player.id === next.hostId ? '<em>Host</em>' : ''}</li>`
+      `<li><span class="presence ${player.connected === false ? 'is-offline' : ''}" aria-hidden="true"></span><strong>${escapeHtml(player.name)}</strong>${player.connected === false ? '<em>Reconnecting</em>' : player.id === next.hostId ? '<em>Host</em>' : ''}</li>`
     ).join('');
     players.innerHTML = next.players.map((player, index) =>
       `<li><span class="player-chip ${player.id === myId ? 'is-you' : ''} ${player.eliminated ? 'is-out' : ''}" style="--owner-color:${ownerColor(index)}"><i></i><span>${escapeHtml(player.name)}</span><b>${player.eliminated ? 'OUT' : `${player.tilesLeft} loose`}</b></span></li>`
@@ -390,7 +420,7 @@ export function createTiles(root: HTMLElement): void {
     lobby.hidden = next.phase !== 'lobby';
     game.hidden = next.phase === 'lobby';
 
-    if (next.phase === 'playing' && previousPhase === 'lobby') {
+    if ((next.phase === 'playing' && previousPhase === 'lobby') || (previousPhase == null && next.phase !== 'lobby')) {
       peelSent = -1;
       const myIndex = next.players.findIndex(player => player.id === myId);
       const myArea = areaFor(next.players[myIndex], myIndex, next.players.length);
@@ -1016,6 +1046,11 @@ export function createTiles(root: HTMLElement): void {
   window.setInterval(() => send({ t: 'ping' }), 25_000);
   initializeUpdates();
   void initializeNearby();
+  const savedName = sanitizeName(localStorage.getItem('tiles-name'));
+  if (roomName && savedName && localStorage.getItem(sessionKey())) {
+    enterLobby.disabled = true;
+    connectOnline(savedName);
+  }
 
   function initializeUpdates(): void {
     if (!('serviceWorker' in navigator)) return;

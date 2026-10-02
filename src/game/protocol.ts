@@ -26,6 +26,7 @@ export interface PlayerArea {
 export interface PlayerSummary {
   id: string;
   name: string;
+  connected?: boolean;
   tilesLeft: number;
   tiles: Tile[];
   board: PlacedTile[];
@@ -76,7 +77,7 @@ export interface RoomSnapshot {
 }
 
 export type ClientMessage =
-  | { t: 'hello'; v: number; name: string }
+  | { t: 'hello'; v: number; name: string; resumeToken?: string }
   | { t: 'dictionary'; dictionary: DictionaryId }
   | { t: 'start' }
   | { t: 'layout'; board: PlacedTile[] }
@@ -86,7 +87,7 @@ export type ClientMessage =
   | { t: 'ping' };
 
 export type ServerMessage =
-  | { t: 'welcome'; id: string; room: RoomSnapshot }
+  | { t: 'welcome'; id: string; resumeToken?: string; room: RoomSnapshot }
   | { t: 'room'; room: RoomSnapshot }
   | { t: 'hand'; tiles: Tile[]; replace: boolean }
   | { t: 'toast'; text: string; tone?: 'good' | 'bad' | 'plain' }
