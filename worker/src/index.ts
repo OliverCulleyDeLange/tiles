@@ -166,7 +166,7 @@ export class TilesRoom extends DurableObject<Env> {
     let resumeToken = validResumeToken(message.resumeToken) ? message.resumeToken : '';
     const returning = resumeToken
       ? game.players.find(player => player.resumeToken === resumeToken)
-      : game.players.find(player => !player.resumeToken && player.connected === false && player.name.toLowerCase() === name.toLowerCase());
+      : game.players.find(player => player.connected === false && player.name.toLowerCase() === name.toLowerCase());
     if (returning) {
       if (!resumeToken) {
         resumeToken = crypto.randomUUID().replaceAll('-', '') + crypto.randomUUID().replaceAll('-', '');
