@@ -184,7 +184,8 @@ public class NearbyConnectionsPlugin extends Plugin {
         @Override public void onConnectionInitiated(String id, ConnectionInfo info) {
             endpointNames.put(id, info.getEndpointName());
             JSObject value = endpoint(id);
-            value.put("code", info.getAuthenticationDigits());
+            String code = info.getAuthenticationToken();
+            value.put("code", code == null || code.isEmpty() ? info.getAuthenticationDigits() : code);
             verifications.put(id, accept -> {
                 if (accept) client.acceptConnection(id, payloads);
                 else client.rejectConnection(id);
