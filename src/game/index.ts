@@ -137,6 +137,8 @@ export function createTiles(root: HTMLElement): void {
     previousSelected: string | null;
     dragIds: string[];
     ghosts: Array<{ element: HTMLElement; dx: number; dy: number }>;
+    target: HTMLElement;
+    pointerId: number;
   } | null = null;
   let camera: Camera = { x: 0, y: 0, scale: 1, rotation: 0 };
   const pointers = new Map<number, Point>();
@@ -213,6 +215,7 @@ export function createTiles(root: HTMLElement): void {
       updateRoom(message.room);
     } else if (message.t === 'room') updateRoom(message.room);
     else if (message.t === 'new-game') {
+      cancelDrag();
       tiles = [];
       selectedId = null;
       selectedIds.clear();
@@ -228,9 +231,11 @@ export function createTiles(root: HTMLElement): void {
           return { ...tile, x: placed?.x ?? null, y: placed?.y ?? null };
         });
       } else tiles.push(...message.tiles.map(tile => ({ ...tile, x: null, y: null })));
-      selectedId = null;
-      selectedIds.clear();
-      renderTiles();
+      if (!dragging) {
+        selectedId = null;
+        selectedIds.clear();
+        renderTiles();
+      }
     } else if (message.t === 'toast') show(message.text, message.tone);
     else if (message.t === 'error') {
       show(message.message, 'bad');
@@ -436,6 +441,7 @@ export function createTiles(root: HTMLElement): void {
   }
 
   function updateRoom(next: RoomSnapshot): void {
+    if (dragging && next.phase !== 'playing') cancelDrag();
     const previousPhase = state?.phase;
     const dictionary = next.dictionary ?? 'scowl-us';
     state = next;
@@ -584,6 +590,8 @@ export function createTiles(root: HTMLElement): void {
       previousSelected,
       dragIds: [],
       ghosts: [],
+      target,
+      pointerId: event.pointerId,
     };
     target.setPointerCapture(event.pointerId);
     target.addEventListener('pointermove', moveDrag);
@@ -644,7 +652,7 @@ export function createTiles(root: HTMLElement): void {
     const tile = tiles.find(value => value.id === dragging!.id);
     const interaction = dragging;
     if (!interaction.moved) {
-      dragging = null;
+      finishDrag(interaction);
       if (tile && interaction.wasPlaced) toggleSelection(tile.id);
       else if (tile) addTappedTile(tile, interaction.previousSelected);
       renderTiles();
@@ -696,10 +704,27 @@ export function createTiles(root: HTMLElement): void {
       selectedId = null;
       layoutChanged = interaction.wasPlaced;
     }
-    dragging = null;
-    interaction.ghosts.forEach(ghost => ghost.element.remove());
+    finishDrag(interaction);
     if (layoutChanged) send({ t: 'layout', board: boardPayload() });
     renderTiles();
+  }
+
+  function cancelDrag(): void {
+    if (!dragging) return;
+    finishDrag(dragging);
+  }
+
+  function finishDrag(interaction: NonNullable<typeof dragging>): void {
+    interaction.target.removeEventListener('pointermove', moveDrag);
+    interaction.target.removeEventListener('pointerup', endDrag);
+    interaction.target.removeEventListener('pointercancel', endDrag);
+    try {
+      if (interaction.target.hasPointerCapture(interaction.pointerId)) {
+        interaction.target.releasePointerCapture(interaction.pointerId);
+      }
+    } catch {}
+    interaction.ghosts.forEach(ghost => ghost.element.remove());
+    if (dragging === interaction) dragging = null;
   }
 
   function reorderRack(tileId: string, clientX: number, clientY: number): void {
