@@ -124,6 +124,7 @@ export function createTiles(root: HTMLElement): void {
   const pointers = new Map<number, Point>();
   let gesture: Gesture | null = null;
   let nativeGesture: { camera: Camera; x: number; y: number } | null = null;
+  let toastTimer: number | null = null;
 
   function show(message: string, tone: 'good' | 'bad' | 'plain' = 'plain'): void {
     toast.textContent = message;
@@ -131,8 +132,12 @@ export function createTiles(root: HTMLElement): void {
     toast.style.bottom = game.hidden
       ? '1.5rem'
       : `${Math.max(12, window.innerHeight - rackWrap.getBoundingClientRect().top + 12)}px`;
+    if (toastTimer != null) window.clearTimeout(toastTimer);
     toast.classList.add('is-visible');
-    window.setTimeout(() => toast.classList.remove('is-visible'), 2200);
+    toastTimer = window.setTimeout(() => {
+      toast.classList.remove('is-visible');
+      toastTimer = null;
+    }, 2200);
   }
 
   function send(message: object): void {
@@ -599,6 +604,19 @@ export function createTiles(root: HTMLElement): void {
   }
 
   function addTappedTile(tile: LocalTile, anchorId: string | null): void {
+    const myIndex = state?.players.findIndex(player => player.id === myId) ?? 0;
+    const area = areaFor(state?.players[myIndex], myIndex, state?.players.length ?? 1);
+    const placed = boardPayload();
+    if (!placed.length) {
+      tile.x = Math.round(area?.x ?? 0);
+      tile.y = Math.round(area?.y ?? 0);
+      selectedIds.clear();
+      selectedIds.add(tile.id);
+      selectedId = tile.id;
+      send({ t: 'layout', board: boardPayload() });
+      return;
+    }
+
     const anchor = tiles.find(value => value.id === anchorId && value.x != null && value.y != null);
     if (!anchor || anchor.x == null || anchor.y == null) {
       show('Select a tile on the board first.', 'plain');
@@ -607,10 +625,7 @@ export function createTiles(root: HTMLElement): void {
     const anchorX = anchor.x;
     const anchorY = anchor.y;
 
-    const placed = boardPayload();
     const at = new Map(placed.map(value => [`${value.x},${value.y}`, value]));
-    const myIndex = state?.players.findIndex(player => player.id === myId) ?? 0;
-    const area = areaFor(state?.players[myIndex], myIndex, state?.players.length ?? 1);
     const rotation = area?.rotation ?? 0;
     const rightX = Math.round(Math.cos(rotation));
     const rightY = Math.round(Math.sin(rotation));
