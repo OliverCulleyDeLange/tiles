@@ -18,10 +18,12 @@ import { LocalRoomHost } from './local-room';
 import { NearbyConnections, isNativeNearby, type NearbyEndpoint, type NearbyVerification } from './nearby';
 import { gunzipSync } from 'fflate';
 import QRCode from 'qrcode';
+import { Capacitor } from '@capacitor/core';
 
 const PRODUCTION_SERVER = import.meta.env.PUBLIC_REALTIME_SERVER
   || 'https://tiles-realtime.oliverdelange.workers.dev';
 const DICTIONARY_BASE = `${import.meta.env.BASE_URL.replace(/\/?$/, '/')}dictionaries`;
+const ANDROID_NATIVE = Capacitor.getPlatform() === 'android';
 const TILE = 48;
 const MIN_SCALE = 0.35;
 const MAX_SCALE = 2.5;
@@ -33,8 +35,8 @@ interface Gesture { center: Point; distance: number; angle: number; camera: Came
 interface FoundWord { text: string; tileIds: string[] }
 
 const DICTIONARY_FILES: Record<DictionaryId, string> = {
-  'scowl-us': `${DICTIONARY_BASE}/scowl-us-60.txt.gz`,
-  'scowl-gb': `${DICTIONARY_BASE}/scowl-gb-60.txt.gz`,
+  'scowl-us': `${DICTIONARY_BASE}/scowl-us-60.txt${ANDROID_NATIVE ? '' : '.gz'}`,
+  'scowl-gb': `${DICTIONARY_BASE}/scowl-gb-60.txt${ANDROID_NATIVE ? '' : '.gz'}`,
 };
 
 export function createTiles(root: HTMLElement): void {
@@ -108,6 +110,7 @@ export function createTiles(root: HTMLElement): void {
   let nearbyHostId: string | null = null;
   let pendingVerification: NearbyVerification | null = null;
   let nearbyName = '';
+  let nearbyPermissionAliases: string[] | undefined;
   let transportSend: ((message: object) => void) | null = null;
   let myId = '';
   let state: RoomSnapshot | null = null;
@@ -163,8 +166,8 @@ export function createTiles(root: HTMLElement): void {
     try {
       const response = await fetch(DICTIONARY_FILES[dictionary]);
       if (!response.ok) throw new Error(`Dictionary request failed: ${response.status}`);
-      const compressed = new Uint8Array(await response.arrayBuffer());
-      const words = new TextDecoder().decode(gunzipSync(compressed))
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      const words = new TextDecoder().decode(ANDROID_NATIVE ? bytes : gunzipSync(bytes))
         .split(/\s+/).filter(Boolean).map(word => word.toUpperCase());
       if (loadingDictionary !== dictionary) return;
       dictionaryWords = new Set(words);
@@ -283,6 +286,11 @@ export function createTiles(root: HTMLElement): void {
     return name;
   }
 
+  async function requestNearbyPermissions(): Promise<void> {
+    if (Capacitor.getPlatform() === 'android') await NearbyConnections.ensurePermissions();
+    else await NearbyConnections.requestPermissions(nearbyPermissionAliases?.length ? { permissions: nearbyPermissionAliases } : undefined);
+  }
+
   function renderNearbyEndpoints(): void {
     nearbyEndpoints.innerHTML = '';
     for (const endpoint of nearbyEndpointMap.values()) {
@@ -302,6 +310,7 @@ export function createTiles(root: HTMLElement): void {
     if (!isNativeNearby()) return;
     const availability = await NearbyConnections.isAvailable().catch(() => ({ available: false }));
     if (!availability.available) return;
+    nearbyPermissionAliases = 'permissionAliases' in availability ? availability.permissionAliases : undefined;
     nearbyEntry.hidden = false;
 
     await NearbyConnections.addListener('endpointFound', endpoint => {
@@ -353,7 +362,7 @@ export function createTiles(root: HTMLElement): void {
     const name = requireNearbyName();
     if (!name) return;
     try {
-      await NearbyConnections.requestPermissions();
+      await requestNearbyPermissions();
       await NearbyConnections.startAdvertising({ name });
       onlineReconnectEnabled = false;
       socket?.close();
@@ -377,7 +386,7 @@ export function createTiles(root: HTMLElement): void {
     const name = requireNearbyName();
     if (!name) return;
     try {
-      await NearbyConnections.requestPermissions();
+      await requestNearbyPermissions();
       await NearbyConnections.startDiscovery({ name });
       onlineReconnectEnabled = false;
       socket?.close();

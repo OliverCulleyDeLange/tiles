@@ -1,14 +1,17 @@
 package uk.co.oliverdelange.tiles;
 
 import android.Manifest;
+import android.os.Build;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
+import com.getcapacitor.PermissionState;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
 import com.google.android.gms.nearby.Nearby;
 import com.google.android.gms.nearby.connection.AdvertisingOptions;
 import com.google.android.gms.nearby.connection.ConnectionInfo;
@@ -31,16 +34,15 @@ import java.util.Map;
 
 @CapacitorPlugin(
     name = "NearbyConnections",
-    permissions = @Permission(
-        alias = "nearby",
-        strings = {
-            Manifest.permission.ACCESS_FINE_LOCATION,
+    permissions = {
+        @Permission(alias = "location", strings = { Manifest.permission.ACCESS_FINE_LOCATION }),
+        @Permission(alias = "bluetooth", strings = {
             Manifest.permission.BLUETOOTH_ADVERTISE,
             Manifest.permission.BLUETOOTH_CONNECT,
-            Manifest.permission.BLUETOOTH_SCAN,
-            Manifest.permission.NEARBY_WIFI_DEVICES
-        }
-    )
+            Manifest.permission.BLUETOOTH_SCAN
+        }),
+        @Permission(alias = "wifi", strings = { Manifest.permission.NEARBY_WIFI_DEVICES })
+    }
 )
 public class NearbyConnectionsPlugin extends Plugin {
     private static final String SERVICE_ID = "uk.co.oliverdelange.tiles.nearby";
@@ -57,7 +59,47 @@ public class NearbyConnectionsPlugin extends Plugin {
     public void isAvailable(PluginCall call) {
         JSObject result = new JSObject();
         result.put("available", true);
+        JSArray permissionAliases = new JSArray();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissionAliases.put("bluetooth");
+            permissionAliases.put("wifi");
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            permissionAliases.put("location");
+            permissionAliases.put("bluetooth");
+        } else {
+            permissionAliases.put("location");
+        }
+        result.put("permissionAliases", permissionAliases);
         call.resolve(result);
+    }
+
+    @PluginMethod
+    public void ensurePermissions(PluginCall call) {
+        String[] aliases = permissionAliases();
+        for (String alias : aliases) {
+            if (getPermissionState(alias) != PermissionState.GRANTED) {
+                requestPermissionForAliases(aliases, call, "nearbyPermissionsResult");
+                return;
+            }
+        }
+        call.resolve();
+    }
+
+    @PermissionCallback
+    public void nearbyPermissionsResult(PluginCall call) {
+        for (String alias : permissionAliases()) {
+            if (getPermissionState(alias) != PermissionState.GRANTED) {
+                call.reject("Nearby devices permission is required.");
+                return;
+            }
+        }
+        call.resolve();
+    }
+
+    private String[] permissionAliases() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) return new String[] { "bluetooth", "wifi" };
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) return new String[] { "location", "bluetooth" };
+        return new String[] { "location" };
     }
 
     @PluginMethod

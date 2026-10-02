@@ -5,8 +5,9 @@ export interface NearbyVerification extends NearbyEndpoint { code: string }
 export interface NearbyPayload { endpointId: string; payload: string }
 
 interface NearbyConnectionsPlugin {
-  isAvailable(): Promise<{ available: boolean }>;
-  requestPermissions(): Promise<Record<string, string>>;
+  isAvailable(): Promise<{ available: boolean; permissionAliases?: string[] }>;
+  requestPermissions(options?: { permissions?: string[] }): Promise<Record<string, string>>;
+  ensurePermissions(): Promise<void>;
   startAdvertising(options: { name: string }): Promise<void>;
   startDiscovery(options: { name: string }): Promise<void>;
   requestConnection(options: { endpointId: string; name: string }): Promise<void>;
