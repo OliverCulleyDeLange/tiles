@@ -80,6 +80,8 @@ export function createTiles(root: HTMLElement): void {
   const nearbyAccept = root.querySelector<HTMLButtonElement>('[data-nearby-accept]')!;
   const nearbyReject = root.querySelector<HTMLButtonElement>('[data-nearby-reject]')!;
   const nearbyClose = root.querySelector<HTMLButtonElement>('[data-nearby-close]')!;
+  const updateNotice = root.querySelector<HTMLElement>('[data-update-notice]')!;
+  const updateNow = root.querySelector<HTMLButtonElement>('[data-update-now]')!;
 
   const params = new URLSearchParams(location.search);
   let roomName = sanitizeRoom(params.get('room'));
@@ -360,7 +362,7 @@ export function createTiles(root: HTMLElement): void {
     lobby.hidden = next.phase !== 'lobby';
     game.hidden = next.phase === 'lobby';
 
-    if (next.phase === 'playing' && previousPhase !== 'playing') {
+    if (next.phase === 'playing' && previousPhase === 'lobby') {
       peelSent = -1;
       const myIndex = next.players.findIndex(player => player.id === myId);
       const myArea = areaFor(next.players[myIndex], myIndex, next.players.length);
@@ -991,7 +993,49 @@ export function createTiles(root: HTMLElement): void {
   reviewRotten.addEventListener('click', () => send({ t: 'review', rotten: true }));
   window.addEventListener('resize', applyCamera);
   window.setInterval(() => send({ t: 'ping' }), 25_000);
+  initializeUpdates();
   void initializeNearby();
+
+  function initializeUpdates(): void {
+    if (!('serviceWorker' in navigator)) return;
+    let hadController = navigator.serviceWorker.controller != null;
+
+    const showUpdate = (): void => {
+      updateNotice.hidden = false;
+    };
+    const checkForUpdate = (): void => {
+      navigator.serviceWorker.controller?.postMessage({ type: 'odl-check-page', url: location.href });
+    };
+
+    navigator.serviceWorker.addEventListener('message', event => {
+      const message = event.data as { type?: unknown; url?: unknown } | null;
+      if (message?.type !== 'odl-page-update-ready' || typeof message.url !== 'string') return;
+      const updated = new URL(message.url, location.origin);
+      if (updated.origin === location.origin && updated.pathname === location.pathname) showUpdate();
+    });
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (hadController) showUpdate();
+      hadController = true;
+    });
+    updateNow.addEventListener('click', () => {
+      updateNow.disabled = true;
+      updateNow.textContent = 'Updating…';
+      location.reload();
+    });
+
+    void navigator.serviceWorker.register('/sw.js').then(registration => {
+      void registration.update();
+      window.setTimeout(checkForUpdate, 1_000);
+      window.setInterval(() => {
+        void registration.update();
+        checkForUpdate();
+      }, 60_000);
+    }).catch(() => {});
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') checkForUpdate();
+    });
+    window.addEventListener('focus', checkForUpdate);
+  }
 }
 
 function ownerColor(index: number): string {

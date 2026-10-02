@@ -111,6 +111,10 @@
       </div>
     </dialog>
 
+    <div class="update-notice" data-update-notice role="status" hidden>
+      <span>A new version of Tiles is ready.</span>
+      <button type="button" data-update-now>Update now</button>
+    </div>
     <div class="toast" data-toast role="status" aria-live="polite"></div>
   </main>
 
@@ -219,6 +223,9 @@
   .review-actions button { padding: .6rem .9rem; cursor: pointer; }
   .review-actions .rotten { background: var(--tr-coral); color: #fff; }
   .review-actions .accept { background: #a9f0bd; color: var(--tr-ink); }
+  .update-notice { position: fixed; z-index: 300; top: max(.75rem, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: .75rem; width: max-content; max-width: calc(100vw - 1.5rem); padding: .6rem .65rem .6rem .9rem; border: 2px solid var(--tr-ink); border-radius: 11px; background: #fffdf3; color: var(--tr-ink); box-shadow: 4px 4px 0 var(--tr-ink); font-size: .9rem; font-weight: 800; }
+  .update-notice[hidden] { display: none; }
+  .update-notice button { flex: 0 0 auto; min-height: 2.5rem; padding: .55rem .75rem; border: 2px solid var(--tr-ink); border-radius: 8px; background: var(--tr-yellow); color: var(--tr-ink); font: 800 .85rem/1 inherit; cursor: pointer; }
   .toast { position: fixed; left: 50%; bottom: 1.5rem; transform: translate(-50%, 1rem); z-index: 100; max-width: calc(100vw - 2rem); padding: .8rem 1rem; border: 2px solid var(--tr-ink); border-radius: 9px; background: #fff4bd; color: var(--tr-ink) !important; box-shadow: 4px 4px 0 var(--tr-ink); font-weight: 800; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .18s ease, transform .18s ease, visibility 0s linear .18s; }
   .toast.is-visible { transform: translate(-50%, 0); opacity: 1; visibility: visible; transition-delay: 0s; }
   .toast[data-tone='good'] { background: #b9f5c8; }
@@ -246,6 +253,7 @@
     .dump-button small { display: none; }
     .review-dialog, .nearby-dialog { width: calc(100vw - 1rem); max-height: calc(100dvh - 1rem); padding: 1rem; border-radius: 14px; box-shadow: 4px 4px 0 var(--tr-ink); }
     .review-actions { display: grid; grid-template-columns: 1fr 1fr; }
+    .update-notice { justify-content: space-between; width: calc(100vw - 1.25rem); }
   }
   @media (max-height: 520px) and (orientation: landscape) {
     .entry-card, .lobby-card { margin-block: .5rem; }
