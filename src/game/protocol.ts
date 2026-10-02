@@ -80,6 +80,7 @@ export type ClientMessage =
   | { t: 'hello'; v: number; name: string; resumeToken?: string }
   | { t: 'dictionary'; dictionary: DictionaryId }
   | { t: 'start' }
+  | { t: 'new-game' }
   | { t: 'layout'; board: PlacedTile[] }
   | { t: 'peel'; peel: number; board: PlacedTile[] }
   | { t: 'dump'; tileId: string }
@@ -89,6 +90,7 @@ export type ClientMessage =
 export type ServerMessage =
   | { t: 'welcome'; id: string; resumeToken?: string; room: RoomSnapshot }
   | { t: 'room'; room: RoomSnapshot }
+  | { t: 'new-game' }
   | { t: 'hand'; tiles: Tile[]; replace: boolean }
   | { t: 'toast'; text: string; tone?: 'good' | 'bad' | 'plain' }
   | { t: 'error'; message: string }

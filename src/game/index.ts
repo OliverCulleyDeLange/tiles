@@ -15,7 +15,7 @@ import {
   type Tile,
 } from './protocol';
 import { LocalRoomHost } from './local-room';
-import { NearbyConnections, isNativeNearby, type NearbyEndpoint, type NearbyVerification } from './nearby';
+import { NearbyConnections, isNativeNearby, type NearbyEndpoint } from './nearby';
 import { gunzipSync } from 'fflate';
 import QRCode from 'qrcode';
 import { Capacitor } from '@capacitor/core';
@@ -65,7 +65,7 @@ export function createTiles(root: HTMLElement): void {
   const gameMenuOpen = root.querySelector<HTMLButtonElement>('[data-game-menu-open]')!;
   const gameMenu = root.querySelector<HTMLDialogElement>('[data-game-menu]')!;
   const gameMenuClose = root.querySelector<HTMLButtonElement>('[data-game-menu-close]')!;
-  const resetBoard = root.querySelector<HTMLButtonElement>('[data-reset-board]')!;
+  const newGame = root.querySelector<HTMLButtonElement>('[data-new-game]')!;
   const goHome = root.querySelector<HTMLButtonElement>('[data-go-home]')!;
   const bunch = root.querySelector<HTMLElement>('[data-bunch]')!;
   const peel = root.querySelector<HTMLElement>('[data-peel]')!;
@@ -86,10 +86,6 @@ export function createTiles(root: HTMLElement): void {
   const nearbyTitle = root.querySelector<HTMLElement>('[data-nearby-title]')!;
   const nearbyStatus = root.querySelector<HTMLElement>('[data-nearby-status]')!;
   const nearbyEndpoints = root.querySelector<HTMLElement>('[data-nearby-endpoints]')!;
-  const nearbyVerification = root.querySelector<HTMLElement>('[data-nearby-verification]')!;
-  const nearbyCode = root.querySelector<HTMLElement>('[data-nearby-code]')!;
-  const nearbyAccept = root.querySelector<HTMLButtonElement>('[data-nearby-accept]')!;
-  const nearbyReject = root.querySelector<HTMLButtonElement>('[data-nearby-reject]')!;
   const nearbyClose = root.querySelector<HTMLButtonElement>('[data-nearby-close]')!;
   const updateNotice = root.querySelector<HTMLElement>('[data-update-notice]')!;
   const updateNow = root.querySelector<HTMLButtonElement>('[data-update-now]')!;
@@ -108,6 +104,7 @@ export function createTiles(root: HTMLElement): void {
     roomNote.textContent = `Private room ${roomName} · 2–8 players`;
   }
   nameInput.value = localStorage.getItem('tiles-name') ?? '';
+  if (!Capacitor.isNativePlatform()) nameInput.focus();
 
   let socket: WebSocket | null = null;
   let onlineName = '';
@@ -117,7 +114,6 @@ export function createTiles(root: HTMLElement): void {
   let reconnectTimer: number | null = null;
   let localHost: LocalRoomHost | null = null;
   let nearbyHostId: string | null = null;
-  let pendingVerification: NearbyVerification | null = null;
   let nearbyName = '';
   let nearbyPermissionAliases: string[] | undefined;
   let transportSend: ((message: object) => void) | null = null;
@@ -216,7 +212,14 @@ export function createTiles(root: HTMLElement): void {
       reconnectAttempt = 0;
       updateRoom(message.room);
     } else if (message.t === 'room') updateRoom(message.room);
-    else if (message.t === 'hand') {
+    else if (message.t === 'new-game') {
+      tiles = [];
+      selectedId = null;
+      selectedIds.clear();
+      peelSent = -1;
+      renderTiles();
+      review.close?.();
+    } else if (message.t === 'hand') {
       if (message.replace) {
         const previous = new Map(tiles.map(tile => [tile.id, tile]));
         const restored = new Map((state?.players.find(player => player.id === myId)?.board ?? []).map(tile => [tile.id, tile]));
@@ -344,16 +347,11 @@ export function createTiles(root: HTMLElement): void {
       renderNearbyEndpoints();
     });
     await NearbyConnections.addListener('verificationRequired', verification => {
-      pendingVerification = verification;
-      nearbyTitle.textContent = `Connect with ${verification.name}?`;
-      nearbyCode.textContent = verification.code;
-      nearbyVerification.hidden = false;
-      if (!nearbyDialog.open) nearbyDialog.showModal();
+      nearbyStatus.textContent = `Connecting to ${verification.name}…`;
+      void NearbyConnections.acceptVerification({ endpointId: verification.endpointId, accept: true });
     });
     await NearbyConnections.addListener('connected', endpoint => {
       connectionRestored();
-      nearbyVerification.hidden = true;
-      pendingVerification = null;
       if (localHost) {
         nearbyStatus.textContent = `${endpoint.name} connected.`;
         if (nearbyDialog.open) nearbyDialog.close();
@@ -430,7 +428,6 @@ export function createTiles(root: HTMLElement): void {
       nearbyEndpointMap.clear();
       nearbyTitle.textContent = 'Finding nearby games…';
       nearbyStatus.textContent = 'Keep Bluetooth and Wi-Fi enabled.';
-      nearbyVerification.hidden = true;
       renderNearbyEndpoints();
       nearbyDialog.showModal();
     } catch {
@@ -456,7 +453,8 @@ export function createTiles(root: HTMLElement): void {
     start.textContent = next.players.length < 2 ? 'Waiting for an opponent…' : `Start with ${next.players.length} players`;
     dictionarySelect.value = dictionary;
     dictionarySelect.disabled = myId !== next.hostId || next.phase !== 'lobby';
-    resetBoard.disabled = next.phase !== 'playing';
+    newGame.disabled = myId !== next.hostId || next.players.length < 2;
+    newGame.title = myId === next.hostId ? '' : 'Only the host can start a new game.';
     void loadDictionary(dictionary);
 
     nameGate.hidden = true;
@@ -986,14 +984,6 @@ export function createTiles(root: HTMLElement): void {
   });
   nearbyHostButton.addEventListener('click', () => { void hostNearby(); });
   nearbyJoinButton.addEventListener('click', () => { void joinNearby(); });
-  nearbyAccept.addEventListener('click', () => {
-    if (pendingVerification) void NearbyConnections.acceptVerification({ endpointId: pendingVerification.endpointId, accept: true });
-  });
-  nearbyReject.addEventListener('click', () => {
-    if (pendingVerification) void NearbyConnections.acceptVerification({ endpointId: pendingVerification.endpointId, accept: false });
-    pendingVerification = null;
-    nearbyVerification.hidden = true;
-  });
   nearbyClose.addEventListener('click', () => nearbyDialog.close());
   dictionarySelect.addEventListener('change', () => {
     const dictionary = dictionarySelect.value as DictionaryId;
@@ -1125,15 +1115,10 @@ export function createTiles(root: HTMLElement): void {
   });
   gameMenuOpen.addEventListener('click', () => gameMenu.showModal());
   gameMenuClose.addEventListener('click', () => gameMenu.close());
-  resetBoard.addEventListener('click', () => {
-    if (state?.phase !== 'playing') return;
-    for (const tile of tiles) { tile.x = null; tile.y = null; }
-    selectedId = null;
-    selectedIds.clear();
-    send({ t: 'layout', board: [] });
-    renderTiles();
+  newGame.addEventListener('click', () => {
+    if (!state || myId !== state.hostId || state.players.length < 2) return;
+    send({ t: 'new-game' });
     gameMenu.close();
-    show('Your tiles are back in the rack.', 'good');
   });
   goHome.addEventListener('click', async () => {
     connectionMode = null;

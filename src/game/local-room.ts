@@ -51,6 +51,7 @@ export class LocalRoomHost {
     if (!player) return;
     if (message.t === 'dictionary') this.setDictionary(peerId, message.dictionary);
     else if (message.t === 'start') this.start(peerId);
+    else if (message.t === 'new-game') this.newGame(peerId);
     else if (message.t === 'layout') this.layout(player, message.board);
     else if (message.t === 'peel') this.doPeel(player, message.peel, message.board);
     else if (message.t === 'dump') this.dump(player, message.tileId);
@@ -112,9 +113,24 @@ export class LocalRoomHost {
 
   private start(peerId: string): void {
     if (this.phase !== 'lobby' || peerId !== this.hostId || this.players.length < 2) return;
+    this.deal(false);
+  }
+
+  private newGame(peerId: string): void {
+    if (peerId !== this.hostId || this.players.length < 2) return;
+    this.deal(true);
+  }
+
+  private deal(restarting: boolean): void {
     this.phase = 'playing';
     this.peel = 0;
     this.bag = shuffledBag();
+    this.winnerId = undefined;
+    this.claimantId = undefined;
+    this.reviewBoard = undefined;
+    this.reviewEndsAt = undefined;
+    this.rottenCalled = false;
+    if (restarting) this.broadcast({ t: 'new-game' });
     const starting = this.players.length <= 4 ? 21 : this.players.length <= 6 ? 15 : 11;
     for (const player of this.players) {
       player.hand = this.bag.splice(-starting);
@@ -123,7 +139,7 @@ export class LocalRoomHost {
       player.voted = false;
       if (player.connected) this.deliver(player.id, { t: 'hand', tiles: player.hand, replace: true });
     }
-    this.broadcast({ t: 'toast', text: 'SPLIT! Build your grid.', tone: 'good' });
+    this.broadcast({ t: 'toast', text: restarting ? 'NEW GAME! Fresh tiles for everyone.' : 'SPLIT! Build your grid.', tone: 'good' });
     this.broadcastRoom();
   }
 

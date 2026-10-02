@@ -117,6 +117,7 @@ export class TilesRoom extends DurableObject<Env> {
     else if (!session.joined) return;
     else if (message.t === 'dictionary') await this.setDictionary(session, message.dictionary);
     else if (message.t === 'start') await this.start(session);
+    else if (message.t === 'new-game') await this.newGame(session);
     else if (message.t === 'layout') await this.layout(session, message.board);
     else if (message.t === 'peel') await this.peel(session, message);
     else if (message.t === 'dump') await this.dump(session, message.tileId);
@@ -204,10 +205,26 @@ export class TilesRoom extends DurableObject<Env> {
   private async start(session: Session): Promise<void> {
     const game = await this.load();
     if (game.phase !== 'lobby' || session.id !== game.hostId || game.players.length < 2) return;
+    await this.deal(game, false);
+  }
+
+  private async newGame(session: Session): Promise<void> {
+    const game = await this.load();
+    if (session.id !== game.hostId || game.players.length < 2) return;
+    await this.deal(game, true);
+  }
+
+  private async deal(game: GameState, restarting: boolean): Promise<void> {
+    await this.ctx.storage.deleteAlarm();
     game.phase = 'playing';
     game.bag = shuffledBag();
     game.peel = 0;
     game.winnerId = undefined;
+    game.claimantId = undefined;
+    game.reviewBoard = undefined;
+    game.reviewEndsAt = undefined;
+    game.rottenCalled = false;
+    if (restarting) this.broadcast({ t: 'new-game' });
     const starting = game.players.length <= 4 ? 21 : game.players.length <= 6 ? 15 : 11;
     const areas = createPlayerAreas(game.players.length);
     for (const [index, player] of game.players.entries()) {
@@ -219,7 +236,7 @@ export class TilesRoom extends DurableObject<Env> {
       this.sendTo(player.id, { t: 'hand', tiles: player.hand, replace: true });
     }
     await this.save(game);
-    this.broadcast({ t: 'toast', text: 'SPLIT! Build your grid.', tone: 'good' });
+    this.broadcast({ t: 'toast', text: restarting ? 'NEW GAME! Fresh tiles for everyone.' : 'SPLIT! Build your grid.', tone: 'good' });
     this.broadcastRoom(game);
   }
 
