@@ -263,11 +263,12 @@
     .lobby-card header { align-items: flex-start; }
     .roster { margin: 1.25rem 0; }
     .dictionary-picker { grid-template-columns: 1fr; gap: .35rem; }
-    .lobby-invite { grid-template-columns: 112px minmax(0, 1fr); gap: .8rem; padding: .7rem; }
-    .qr-frame canvas { width: 96px; height: 96px; }
+    .lobby-invite { grid-template-columns: minmax(0, 1fr); justify-items: center; gap: .75rem; padding: .85rem; text-align: center; }
+    .qr-frame canvas { width: 132px; height: 132px; }
+    .invite-copy { width: 100%; min-width: 0; }
     .invite-copy h2 { font-size: 1.45rem; }
     .invite-copy > p:not(.eyebrow) { margin: .35rem 0 .6rem; }
-    .invite-actions { grid-template-columns: 1fr; gap: .4rem; }
+    .invite-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
     .copy-action, .share-action { min-height: 2.5rem; }
     .game-bar { grid-template-columns: minmax(0, 1fr) auto; }
     .compact-brand { display: none; }
