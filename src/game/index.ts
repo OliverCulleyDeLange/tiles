@@ -33,6 +33,16 @@ interface Point { x: number; y: number }
 interface Camera { x: number; y: number; scale: number; rotation: number }
 interface Gesture { center: Point; distance: number; angle: number; camera: Camera; world?: Point; rotate?: boolean }
 interface FoundWord { text: string; tileIds: string[] }
+interface SavedGame {
+  room: string;
+  name: string;
+  phase: 'lobby' | 'playing' | 'review';
+  playerNames: string[];
+  updatedAt: number;
+}
+
+const SAVED_GAMES_KEY = 'tiles-saved-games-v1';
+const MAX_SAVED_GAMES = 8;
 
 const DICTIONARY_FILES: Record<DictionaryId, string> = {
   'scowl-us': `${DICTIONARY_BASE}/scowl-us-60.txt${ANDROID_NATIVE ? '' : '.gz'}`,
@@ -46,6 +56,8 @@ export function createTiles(root: HTMLElement): void {
   const nameForm = root.querySelector<HTMLFormElement>('[data-name-form]')!;
   const nameInput = root.querySelector<HTMLInputElement>('[data-name-input]')!;
   const enterLobby = root.querySelector<HTMLButtonElement>('[data-enter-lobby]')!;
+  const savedGames = root.querySelector<HTMLElement>('[data-saved-games]')!;
+  const savedGameList = root.querySelector<HTMLElement>('[data-saved-game-list]')!;
   const roomNote = root.querySelector<HTMLElement>('[data-room-note]')!;
   const roster = root.querySelector<HTMLElement>('[data-roster]')!;
   const dictionarySelect = root.querySelector<HTMLSelectElement>('[data-dictionary]')!;
@@ -145,6 +157,90 @@ export function createTiles(root: HTMLElement): void {
   let gesture: Gesture | null = null;
   let nativeGesture: { camera: Camera; x: number; y: number } | null = null;
   let toastTimer: number | null = null;
+
+  function readSavedGames(): SavedGame[] {
+    try {
+      const value = JSON.parse(localStorage.getItem(SAVED_GAMES_KEY) ?? '[]') as unknown;
+      if (!Array.isArray(value)) return [];
+      const records = value.flatMap(candidate => {
+        if (!candidate || typeof candidate !== 'object') return [];
+        const record = candidate as Partial<SavedGame>;
+        const savedRoom = sanitizeRoom(record.room);
+        if (!savedRoom || typeof record.name !== 'string' || !['lobby', 'playing', 'review'].includes(record.phase ?? '')) return [];
+        return [{
+          room: savedRoom,
+          name: sanitizeName(record.name),
+          phase: record.phase as SavedGame['phase'],
+          playerNames: Array.isArray(record.playerNames)
+            ? record.playerNames.filter(value => typeof value === 'string').map(sanitizeName).filter(Boolean).slice(0, 8)
+            : [],
+          updatedAt: typeof record.updatedAt === 'number' ? record.updatedAt : 0,
+        }];
+      }).filter(record => record.name && localStorage.getItem(`tiles-session:${record.room}`));
+      const fallbackName = sanitizeName(localStorage.getItem('tiles-name'));
+      if (fallbackName) {
+        for (let index = 0; index < localStorage.length; index++) {
+          const key = localStorage.key(index);
+          if (!key?.startsWith('tiles-session:')) continue;
+          const savedRoom = sanitizeRoom(key.slice('tiles-session:'.length));
+          if (!savedRoom || savedRoom === 'nearby' || records.some(record => record.room === savedRoom)) continue;
+          records.push({ room: savedRoom, name: fallbackName, phase: 'playing', playerNames: [], updatedAt: 0 });
+        }
+      }
+      return records.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_SAVED_GAMES);
+    } catch {
+      return [];
+    }
+  }
+
+  function writeSavedGames(records: SavedGame[]): void {
+    localStorage.setItem(SAVED_GAMES_KEY, JSON.stringify(records.slice(0, MAX_SAVED_GAMES)));
+  }
+
+  function rememberGame(room: RoomSnapshot): void {
+    if (connectionMode !== 'online' || !roomName) return;
+    const records = readSavedGames().filter(record => record.room !== roomName);
+    if (room.phase !== 'finished') {
+      const me = room.players.find(player => player.id === myId);
+      const name = sanitizeName(me?.name ?? onlineName);
+      if (name && localStorage.getItem(sessionKey())) records.unshift({
+        room: roomName,
+        name,
+        phase: room.phase,
+        playerNames: room.players.map(player => player.name),
+        updatedAt: Date.now(),
+      });
+    }
+    writeSavedGames(records);
+  }
+
+  function renderSavedGames(): void {
+    const records = roomName ? [] : readSavedGames();
+    savedGameList.replaceChildren();
+    savedGames.hidden = records.length === 0;
+    for (const record of records) {
+      const item = document.createElement('div');
+      item.className = 'saved-game';
+      const open = document.createElement('button');
+      open.type = 'button';
+      open.className = 'saved-game-open';
+      open.dataset.savedRoom = record.room;
+      open.dataset.savedName = record.name;
+      const title = document.createElement('strong');
+      title.textContent = record.playerNames.length ? record.playerNames.join(', ') : `Room ${record.room}`;
+      const detail = document.createElement('span');
+      detail.textContent = `${record.phase === 'review' ? 'Final check' : record.phase === 'playing' ? 'In progress' : 'In lobby'} · ${new Date(record.updatedAt).toLocaleString()}`;
+      open.append(title, detail);
+      const forget = document.createElement('button');
+      forget.type = 'button';
+      forget.className = 'saved-game-forget';
+      forget.dataset.forgetRoom = record.room;
+      forget.setAttribute('aria-label', `Forget room ${record.room}`);
+      forget.textContent = '×';
+      item.append(open, forget);
+      savedGameList.append(item);
+    }
+  }
 
   function show(message: string, tone: 'good' | 'bad' | 'plain' = 'plain'): void {
     toast.textContent = message;
@@ -446,6 +542,7 @@ export function createTiles(root: HTMLElement): void {
     const dictionary = next.dictionary ?? 'scowl-us';
     state = next;
     state.dictionary = dictionary;
+    rememberGame(next);
     bunch.textContent = String(next.bunch);
     peel.textContent = String(next.peel);
     roster.innerHTML = next.players.map(player =>
@@ -1007,6 +1104,23 @@ export function createTiles(root: HTMLElement): void {
     enterLobby.disabled = true;
     connectOnline(name);
   });
+  savedGameList.addEventListener('click', event => {
+    const target = event.target as HTMLElement;
+    const open = target.closest<HTMLButtonElement>('[data-saved-room]');
+    if (open?.dataset.savedRoom && open.dataset.savedName) {
+      localStorage.setItem('tiles-name', open.dataset.savedName);
+      const url = new URL(location.href);
+      url.searchParams.set('room', open.dataset.savedRoom);
+      location.assign(url);
+      return;
+    }
+    const forget = target.closest<HTMLButtonElement>('[data-forget-room]');
+    if (!forget?.dataset.forgetRoom) return;
+    const forgottenRoom = forget.dataset.forgetRoom;
+    writeSavedGames(readSavedGames().filter(record => record.room !== forgottenRoom));
+    localStorage.removeItem(`tiles-session:${forgottenRoom}`);
+    renderSavedGames();
+  });
   nearbyHostButton.addEventListener('click', () => { void hostNearby(); });
   nearbyJoinButton.addEventListener('click', () => { void joinNearby(); });
   nearbyClose.addEventListener('click', () => nearbyDialog.close());
@@ -1176,6 +1290,7 @@ export function createTiles(root: HTMLElement): void {
   window.setInterval(() => send({ t: 'ping' }), 25_000);
   initializeUpdates();
   void initializeNearby();
+  renderSavedGames();
   const savedName = sanitizeName(localStorage.getItem('tiles-name'));
   if (roomName && savedName && localStorage.getItem(sessionKey())) {
     enterLobby.disabled = true;
