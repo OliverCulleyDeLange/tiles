@@ -4,7 +4,7 @@ import CapApp_SPM
 
 final class TilesBridgeViewController: CAPBridgeViewController {
     override func capacitorDidLoad() {
-        bridge?.registerPluginType(NearbyConnectionsPlugin.self)
+        bridge?.registerPluginInstance(NearbyConnectionsPlugin())
     }
 }
 
