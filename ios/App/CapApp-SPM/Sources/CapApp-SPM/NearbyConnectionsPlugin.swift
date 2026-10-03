@@ -12,6 +12,7 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "isAvailable", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "requestPermissions", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startAdvertising", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "stopAdvertising", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startDiscovery", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopDiscovery", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setKeepAwake", returnType: CAPPluginReturnPromise),
@@ -57,6 +58,11 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
             advertiser = value
         }
         value.startAdvertising(using: Data(localName.utf8))
+        call.resolve()
+    }
+
+    @objc public func stopAdvertising(_ call: CAPPluginCall) {
+        advertiser?.stopAdvertising()
         call.resolve()
     }
 

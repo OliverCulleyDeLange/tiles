@@ -97,13 +97,9 @@ export function createTiles(root: HTMLElement): void {
   const resetView = root.querySelector<HTMLButtonElement>('[data-reset-view]')!;
   const toast = root.querySelector<HTMLElement>('[data-toast]')!;
   const nearbyEntry = root.querySelector<HTMLElement>('[data-nearby-entry]')!;
-  const nearbyHostButton = root.querySelector<HTMLButtonElement>('[data-nearby-host]')!;
-  const nearbyJoinButton = root.querySelector<HTMLButtonElement>('[data-nearby-join]')!;
-  const nearbyDialog = root.querySelector<HTMLDialogElement>('[data-nearby-dialog]')!;
-  const nearbyTitle = root.querySelector<HTMLElement>('[data-nearby-title]')!;
+  const nearbyStartButton = root.querySelector<HTMLButtonElement>('[data-nearby-start]')!;
   const nearbyStatus = root.querySelector<HTMLElement>('[data-nearby-status]')!;
   const nearbyEndpoints = root.querySelector<HTMLElement>('[data-nearby-endpoints]')!;
-  const nearbyClose = root.querySelector<HTMLButtonElement>('[data-nearby-close]')!;
   const updateNotice = root.querySelector<HTMLElement>('[data-update-notice]')!;
   const updateNow = root.querySelector<HTMLButtonElement>('[data-update-now]')!;
   const connectionNotice = root.querySelector<HTMLElement>('[data-connection-notice]')!;
@@ -118,7 +114,7 @@ export function createTiles(root: HTMLElement): void {
     : PRODUCTION_SERVER.replace(/^http/, 'ws');
   roomLabels.forEach(label => { label.textContent = roomName; });
   if (roomName) {
-    enterLobby.textContent = 'Join lobby';
+    enterLobby.textContent = 'Join online game';
     roomNote.textContent = `Private room ${roomName} · 2–8 players`;
   }
   nameInput.value = localStorage.getItem('tiles-name') ?? '';
@@ -127,7 +123,7 @@ export function createTiles(root: HTMLElement): void {
   let socket: WebSocket | null = null;
   let onlineName = '';
   let onlineReconnectEnabled = false;
-  let connectionMode: 'online' | 'nearby-host' | 'nearby-join' | null = null;
+  let connectionMode: 'online' | 'nearby-home' | 'nearby-host' | 'nearby-join' | null = null;
   let reconnectAttempt = 0;
   let reconnectTimer: number | null = null;
   let localHost: LocalRoomHost | null = null;
@@ -139,10 +135,13 @@ export function createTiles(root: HTMLElement): void {
   let nearbyReconnectTimer: number | null = null;
   let nearbyName = '';
   let nearbyPermissionAliases: string[] | undefined;
+  const selectedNearbyIds = new Set<string>();
+  let nearbyHomeStarting = false;
   let transportSend: ((message: object) => void) | null = null;
   let myId = '';
   let state: RoomSnapshot | null = null;
   let tiles: LocalTile[] = [];
+  let rackOrder: Array<string | null> = [];
   let selectedId: string | null = null;
   const selectedIds = new Set<string>();
   let peelSent = -1;
@@ -371,6 +370,7 @@ export function createTiles(root: HTMLElement): void {
     else if (message.t === 'new-game') {
       cancelDrag();
       tiles = [];
+      rackOrder = [];
       selectedId = null;
       selectedIds.clear();
       peelSent = -1;
@@ -386,23 +386,15 @@ export function createTiles(root: HTMLElement): void {
       if (message.replace) {
         const previous = new Map(tiles.map(tile => [tile.id, tile]));
         const restored = new Map((state?.players.find(player => player.id === myId)?.board ?? []).map(tile => [tile.id, tile]));
-        const incoming = new Map(message.tiles.map(tile => [tile.id, tile]));
-        const slots: Array<LocalTile | null> = tiles.map(existing => {
-          const tile = incoming.get(existing.id);
-          if (!tile) return null;
-          incoming.delete(existing.id);
+        tiles = message.tiles.map(tile => {
           const placed = previous.get(tile.id) ?? restored.get(tile.id);
           return { ...tile, x: placed?.x ?? null, y: placed?.y ?? null };
         });
-        const additions = [...incoming.values()].map(tile => {
-          const placed = restored.get(tile.id);
-          return { ...tile, x: placed?.x ?? null, y: placed?.y ?? null } as LocalTile;
-        });
-        if (!slots.length) tiles = additions;
-        else tiles = fillRackSpaces(slots, additions);
+        syncRackOrder(tiles.map(tile => tile.id));
       } else {
-        const slots: Array<LocalTile | null> = [...tiles];
-        tiles = fillRackSpaces(slots, message.tiles.map(tile => ({ ...tile, x: null, y: null })));
+        const additions = message.tiles.map(tile => ({ ...tile, x: null, y: null }));
+        tiles.push(...additions);
+        addRackTiles(additions.map(tile => tile.id));
       }
       if (!dragging) {
         selectedId = null;
@@ -417,8 +409,10 @@ export function createTiles(root: HTMLElement): void {
   }
 
   function connectOnline(name: string): void {
+    const wasNearbyHome = connectionMode === 'nearby-home';
     onlineName = name;
     connectionMode = 'online';
+    if (wasNearbyHome) void NearbyConnections.stop();
     onlineReconnectEnabled = true;
     if (reconnectTimer != null) window.clearTimeout(reconnectTimer);
     reconnectTimer = null;
@@ -561,18 +555,72 @@ export function createTiles(root: HTMLElement): void {
   }
 
   function renderNearbyEndpoints(): void {
-    nearbyEndpoints.innerHTML = '';
+    nearbyEndpoints.replaceChildren();
     for (const endpoint of nearbyEndpointMap.values()) {
       const button = document.createElement('button');
       button.type = 'button';
       button.textContent = endpoint.name;
+      button.classList.toggle('is-selected', selectedNearbyIds.has(endpoint.endpointId));
+      button.setAttribute('aria-pressed', String(selectedNearbyIds.has(endpoint.endpointId)));
       button.addEventListener('click', () => {
-        nearbyStatus.textContent = `Connecting to ${endpoint.name}…`;
-        void NearbyConnections.requestConnection({ endpointId: endpoint.endpointId, name: nearbyName });
+        if (selectedNearbyIds.has(endpoint.endpointId)) selectedNearbyIds.delete(endpoint.endpointId);
+        else selectedNearbyIds.add(endpoint.endpointId);
+        renderNearbyEndpoints();
       });
       nearbyEndpoints.append(button);
     }
-    if (!nearbyEndpointMap.size) nearbyEndpoints.textContent = 'No nearby games found yet.';
+    if (!nearbyEndpointMap.size) {
+      const empty = document.createElement('p');
+      empty.textContent = nearbyHomeStarting ? 'Starting nearby discovery…' : 'Searching for players…';
+      nearbyEndpoints.append(empty);
+    }
+    nearbyStartButton.disabled = selectedNearbyIds.size === 0 || nearbyHomeStarting;
+    nearbyStartButton.textContent = selectedNearbyIds.size
+      ? `Start local game · ${selectedNearbyIds.size + 1} players`
+      : 'Start local game';
+  }
+
+  async function startNearbyHome(): Promise<void> {
+    if (!isNativeNearby() || connectionMode && connectionMode !== 'nearby-home') return;
+    const name = sanitizeName(nameInput.value);
+    if (!name || nearbyHomeStarting) return;
+    nearbyHomeStarting = true;
+    nearbyName = name;
+    connectionMode = 'nearby-home';
+    nearbyStatus.textContent = 'Making you visible and looking for local players…';
+    renderNearbyEndpoints();
+    try {
+      await requestNearbyPermissions();
+      await NearbyConnections.startAdvertising({ name });
+      await NearbyConnections.startDiscovery({ name });
+      nearbyStatus.textContent = 'Nearby players are selected automatically. Tap one to exclude them.';
+    } catch {
+      connectionMode = null;
+      nearbyStatus.textContent = 'Allow nearby-device access to find local players.';
+    } finally {
+      nearbyHomeStarting = false;
+      renderNearbyEndpoints();
+    }
+  }
+
+  function enterNearbyGuest(endpoint: NearbyEndpoint): void {
+    connectionMode = 'nearby-join';
+    clearNearbyReconnectTimer();
+    nearbyReconnectAttempt = 0;
+    nearbyAutoReconnect = false;
+    nearbyConnectingId = null;
+    nearbyHostId = endpoint.endpointId;
+    nearbyHostName = endpoint.name;
+    roomName = 'nearby';
+    roomLabels.forEach(label => { label.textContent = 'Local'; });
+    onlineInvite.hidden = true;
+    lobbyHelp.textContent = 'This is a local game connected directly to the nearby starter—no internet or invite link needed.';
+    transportSend = message => sendNearby(endpoint.endpointId, message);
+    void NearbyConnections.setKeepAwake({ enabled: true });
+    void NearbyConnections.stopAdvertising();
+    void NearbyConnections.stopDiscovery();
+    const resumeToken = localStorage.getItem(sessionKey()) ?? undefined;
+    send({ t: 'hello', v: PROTOCOL_VERSION, name: nearbyName, resumeToken });
   }
 
   async function initializeNearby(): Promise<void> {
@@ -583,7 +631,9 @@ export function createTiles(root: HTMLElement): void {
     nearbyEntry.hidden = false;
 
     await NearbyConnections.addListener('endpointFound', endpoint => {
+      const isNew = !nearbyEndpointMap.has(endpoint.endpointId);
       nearbyEndpointMap.set(endpoint.endpointId, endpoint);
+      if (connectionMode === 'nearby-home' && isNew) selectedNearbyIds.add(endpoint.endpointId);
       renderNearbyEndpoints();
       if (connectionMode === 'nearby-join' && nearbyAutoReconnect && !nearbyHostId && !nearbyConnectingId
         && (!nearbyHostName || endpoint.name === nearbyHostName)) {
@@ -597,6 +647,7 @@ export function createTiles(root: HTMLElement): void {
     });
     await NearbyConnections.addListener('endpointLost', endpoint => {
       nearbyEndpointMap.delete(endpoint.endpointId);
+      selectedNearbyIds.delete(endpoint.endpointId);
       if (nearbyConnectingId === endpoint.endpointId) nearbyConnectingId = null;
       renderNearbyEndpoints();
     });
@@ -609,7 +660,14 @@ export function createTiles(root: HTMLElement): void {
       if (localHost) {
         nearbyReconnectAttempt = 0;
         nearbyStatus.textContent = `${endpoint.name} connected.`;
-        if (nearbyDialog.open) nearbyDialog.close();
+        return;
+      }
+      if (connectionMode === 'nearby-home') {
+        enterNearbyGuest(endpoint);
+        return;
+      }
+      if (connectionMode !== 'nearby-join') {
+        void NearbyConnections.disconnect({ endpointId: endpoint.endpointId });
         return;
       }
       clearNearbyReconnectTimer();
@@ -618,11 +676,7 @@ export function createTiles(root: HTMLElement): void {
       nearbyConnectingId = null;
       nearbyHostId = endpoint.endpointId;
       nearbyHostName = endpoint.name;
-      transportSend = message => sendNearby(endpoint.endpointId, message);
-      void NearbyConnections.stopDiscovery();
-      if (nearbyDialog.open) nearbyDialog.close();
-      const resumeToken = localStorage.getItem(sessionKey()) ?? undefined;
-      send({ t: 'hello', v: PROTOCOL_VERSION, name: nearbyName, resumeToken });
+      enterNearbyGuest(endpoint);
     });
     await NearbyConnections.addListener('disconnected', endpoint => {
       if (connectionMode === 'nearby-host' && localHost) {
@@ -643,9 +697,11 @@ export function createTiles(root: HTMLElement): void {
         else handleServerMessage(JSON.parse(event.payload) as ServerMessage);
       } catch { /* Ignore malformed nearby payloads. */ }
     });
+    if (sanitizeName(nameInput.value)) void startNearbyHome();
+    else nearbyStatus.textContent = 'Enter your player name to appear for nearby players.';
   }
 
-  async function startNearbyHost(name: string, restored?: StoredLocalRoom): Promise<void> {
+  async function startNearbyHost(name: string, restored?: StoredLocalRoom, inviteIds: string[] = []): Promise<void> {
     try {
       await requestNearbyPermissions();
       connectionMode = 'nearby-host';
@@ -657,13 +713,14 @@ export function createTiles(root: HTMLElement): void {
       connectionRestored();
       stopOnlineTransport();
       await NearbyConnections.setKeepAwake({ enabled: true });
+      await NearbyConnections.stopDiscovery();
       await NearbyConnections.startAdvertising({ name });
       roomName = 'nearby';
       if (!restored) {
         localStorage.removeItem(LOCAL_GAME_KEY);
         localStorage.removeItem('tiles-session:nearby');
       }
-      roomLabels.forEach(label => { label.textContent = 'Nearby'; });
+      roomLabels.forEach(label => { label.textContent = 'Local'; });
       onlineInvite.hidden = true;
       lobbyHelp.textContent = 'This is a local, device-to-device game. Friends can join from nearby play. Keep Bluetooth and Wi-Fi enabled.';
       localHost = new LocalRoomHost((peerId, message) => {
@@ -673,15 +730,24 @@ export function createTiles(root: HTMLElement): void {
       transportSend = message => localHost?.receive(localPeerId, message as ClientMessage);
       const resumeToken = restored ? localStorage.getItem(sessionKey()) ?? undefined : undefined;
       localHost.receive(localPeerId, { t: 'hello', v: PROTOCOL_VERSION, name, resumeToken });
+      for (const endpointId of inviteIds) {
+        void NearbyConnections.requestConnection({ endpointId, name }).catch(() => {
+          show('One nearby player could not be invited.', 'bad');
+        });
+      }
       show(restored ? 'Local game restored. Friends can rejoin now.' : 'Local lobby ready. Friends can discover you now.', 'good');
     } catch {
       show('Nearby play needs Bluetooth, Wi-Fi and permission to find devices.', 'bad');
     }
   }
 
-  async function hostNearby(): Promise<void> {
+  async function startSelectedLocalGame(): Promise<void> {
     const name = requireNearbyName();
-    if (name) await startNearbyHost(name);
+    if (!name) return;
+    const inviteIds = [...selectedNearbyIds];
+    if (!inviteIds.length) return;
+    nearbyStartButton.disabled = true;
+    await startNearbyHost(name, undefined, inviteIds);
   }
 
   async function continueLocalGame(name: string): Promise<void> {
@@ -695,38 +761,6 @@ export function createTiles(root: HTMLElement): void {
     nameInput.value = name;
     localStorage.setItem('tiles-name', name);
     await startNearbyHost(name, restored);
-  }
-
-  async function joinNearby(): Promise<void> {
-    const name = requireNearbyName();
-    if (!name) return;
-    try {
-      await requestNearbyPermissions();
-      connectionMode = 'nearby-join';
-      nearbyName = name;
-      nearbyAutoReconnect = false;
-      nearbyConnectingId = null;
-      nearbyReconnectAttempt = 0;
-      clearNearbyReconnectTimer();
-      connectionRestored();
-      stopOnlineTransport();
-      await NearbyConnections.setKeepAwake({ enabled: true });
-      await NearbyConnections.startDiscovery({ name });
-      localHost = null;
-      nearbyHostId = null;
-      nearbyHostName = '';
-      roomName = 'nearby';
-      roomLabels.forEach(label => { label.textContent = 'Nearby'; });
-      onlineInvite.hidden = true;
-      lobbyHelp.textContent = 'This is a local game connected directly to the nearby host—no internet or invite link needed.';
-      nearbyEndpointMap.clear();
-      nearbyTitle.textContent = 'Finding nearby games…';
-      nearbyStatus.textContent = 'Keep Bluetooth and Wi-Fi enabled.';
-      renderNearbyEndpoints();
-      nearbyDialog.showModal();
-    } catch {
-      show('Nearby play needs Bluetooth, Wi-Fi and permission to find devices.', 'bad');
-    }
   }
 
   function updateRoom(next: RoomSnapshot): void {
@@ -810,11 +844,13 @@ export function createTiles(root: HTMLElement): void {
 
     const myIndex = state?.players.findIndex(player => player.id === myId) ?? 0;
     const me = state?.players.find(player => player.id === myId);
-    for (const tile of tiles) {
+    for (const [slotIndex, tileId] of rackOrder.entries()) {
       const slot = document.createElement('div');
       slot.className = 'rack-slot';
-      slot.dataset.rackId = tile.id;
-      if (tile.x == null || tile.y == null) slot.append(makeTile(tile, me, ownerColor(Math.max(0, myIndex)), canEditTiles(), 0));
+      slot.dataset.rackIndex = String(slotIndex);
+      if (tileId) slot.dataset.rackId = tileId;
+      const tile = tileId ? tiles.find(value => value.id === tileId) : undefined;
+      if (tile && (tile.x == null || tile.y == null)) slot.append(makeTile(tile, me, ownerColor(Math.max(0, myIndex)), canEditTiles(), 0));
       rack.append(slot);
     }
     dump.disabled = !selectedId || (state?.bunch ?? 0) < 3 || state?.phase !== 'playing';
@@ -1095,19 +1131,19 @@ export function createTiles(root: HTMLElement): void {
     send({ t: 'layout', board });
   }
 
-  function fillRackSpaces(slots: Array<LocalTile | null>, additions: LocalTile[]): LocalTile[] {
-    const displaced: LocalTile[] = [];
-    for (const tile of additions) {
-      const index = slots.findIndex(value => value == null || (value.x != null && value.y != null));
-      if (index < 0) {
-        slots.push(tile);
-        continue;
-      }
-      const occupant = slots[index];
-      if (occupant) displaced.push(occupant);
-      slots[index] = tile;
+  function addRackTiles(ids: string[]): void {
+    for (const id of ids) {
+      if (rackOrder.includes(id)) continue;
+      const empty = rackOrder.findIndex(value => value == null || tiles.find(tile => tile.id === value)?.x != null);
+      if (empty < 0) rackOrder.push(id);
+      else rackOrder[empty] = id;
     }
-    return [...slots.filter((tile): tile is LocalTile => tile != null), ...displaced];
+  }
+
+  function syncRackOrder(validIds: string[]): void {
+    const valid = new Set(validIds);
+    rackOrder = rackOrder.map(id => id && valid.has(id) ? id : null);
+    addRackTiles(validIds.filter(id => !rackOrder.includes(id)));
   }
 
   function cancelDrag(): void {
@@ -1131,8 +1167,12 @@ export function createTiles(root: HTMLElement): void {
   function reorderRack(tileId: string, clientX: number, clientY: number): void {
     const tile = tiles.find(value => value.id === tileId);
     if (!tile) return;
-    const sourceIndex = tiles.findIndex(value => value.id === tileId);
-    const slots = [...rack.querySelectorAll<HTMLElement>('[data-rack-id]')];
+    let sourceIndex = rackOrder.indexOf(tileId);
+    if (sourceIndex < 0) {
+      addRackTiles([tileId]);
+      sourceIndex = rackOrder.indexOf(tileId);
+    }
+    const slots = [...rack.querySelectorAll<HTMLElement>('[data-rack-index]')];
     const targetSlot = slots.reduce<HTMLElement | null>((closest, candidate) => {
       const rect = candidate.getBoundingClientRect();
       if (pointInRect(clientX, clientY, rect)) return candidate;
@@ -1142,38 +1182,18 @@ export function createTiles(root: HTMLElement): void {
       const closestDistance = Math.hypot(clientX - (closestRect.left + closestRect.width / 2), clientY - (closestRect.top + closestRect.height / 2));
       return distance < closestDistance ? candidate : closest;
     }, null);
-    const targetIndex = tiles.findIndex(value => value.id === targetSlot?.dataset.rackId);
-    const targetTile = tiles[targetIndex];
-    if (targetTile && targetTile.id !== tileId && targetTile.x != null && targetTile.y != null) {
-      [tiles[sourceIndex], tiles[targetIndex]] = [tiles[targetIndex], tiles[sourceIndex]];
+    const targetIndex = Number(targetSlot?.dataset.rackIndex ?? -1);
+    if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return;
+    const targetId = rackOrder[targetIndex];
+    const targetTile = targetId ? tiles.find(value => value.id === targetId) : undefined;
+    if (!targetId || (targetTile && targetTile.x != null && targetTile.y != null)) {
+      [rackOrder[sourceIndex], rackOrder[targetIndex]] = [rackOrder[targetIndex], rackOrder[sourceIndex]];
       return;
     }
-
-    const remaining = tiles.filter(value => value.id !== tileId);
-    const elements = slots
-      .filter(element => element.dataset.rackId !== tileId);
-    let insertion = remaining.length;
-    if (elements.length) {
-      const rows: Array<{ centerY: number; entries: Array<{ id: string; centerX: number }> }> = [];
-      for (const element of elements) {
-        const rect = element.getBoundingClientRect();
-        const centerY = rect.top + rect.height / 2;
-        let row = rows.find(value => Math.abs(value.centerY - centerY) < rect.height / 2);
-        if (!row) { row = { centerY, entries: [] }; rows.push(row); }
-        row.entries.push({ id: element.dataset.rackId!, centerX: rect.left + rect.width / 2 });
-      }
-      rows.sort((a, b) => a.centerY - b.centerY);
-      const row = rows.reduce((closest, candidate) =>
-        Math.abs(candidate.centerY - clientY) < Math.abs(closest.centerY - clientY) ? candidate : closest
-      );
-      row.entries.sort((a, b) => a.centerX - b.centerX);
-      const before = row.entries.find(entry => clientX < entry.centerX);
-      const anchorId = before?.id ?? row.entries.at(-1)?.id;
-      const anchorIndex = remaining.findIndex(value => value.id === anchorId);
-      insertion = before ? anchorIndex : anchorIndex + 1;
-    }
-    remaining.splice(Math.max(0, insertion), 0, tile);
-    tiles = remaining;
+    const emptyIndex = rackOrder.findIndex(value => value == null || tiles.find(candidate => candidate.id === value)?.x != null);
+    if (emptyIndex >= 0) rackOrder[emptyIndex] = null;
+    rackOrder.splice(sourceIndex, 1);
+    rackOrder.splice(targetIndex, 0, tileId);
   }
 
   function clearSelection(): void {
@@ -1415,14 +1435,18 @@ export function createTiles(root: HTMLElement): void {
     localStorage.removeItem(`tiles-session:${forgottenRoom}`);
     renderSavedGames();
   });
-  nearbyHostButton.addEventListener('click', () => { void hostNearby(); });
-  nearbyJoinButton.addEventListener('click', () => { void joinNearby(); });
-  nearbyClose.addEventListener('click', async () => {
-    nearbyDialog.close();
-    if (connectionMode !== 'nearby-join' || state) return;
-    connectionMode = null;
-    nearbyEndpointMap.clear();
-    await NearbyConnections.stop().catch(() => undefined);
+  nearbyStartButton.addEventListener('click', () => { void startSelectedLocalGame(); });
+  nameInput.addEventListener('change', async () => {
+    const name = sanitizeName(nameInput.value);
+    if (!name || state || !isNativeNearby()) return;
+    localStorage.setItem('tiles-name', name);
+    if (connectionMode === 'nearby-home') {
+      connectionMode = null;
+      await NearbyConnections.stop().catch(() => undefined);
+      nearbyEndpointMap.clear();
+      selectedNearbyIds.clear();
+    }
+    void startNearbyHome();
   });
   dictionarySelect.addEventListener('change', () => {
     const dictionary = dictionarySelect.value as DictionaryId;
@@ -1632,8 +1656,10 @@ export function createTiles(root: HTMLElement): void {
     if (connectionMode === 'online') send({ t: 'ping' });
   }, 25_000);
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible'
-      && (connectionMode === 'nearby-host' || (connectionMode === 'nearby-join' && !nearbyHostId))) {
+    if (document.visibilityState !== 'visible') return;
+    if (connectionMode === 'nearby-home') {
+      void startNearbyHome();
+    } else if (connectionMode === 'nearby-host' || (connectionMode === 'nearby-join' && !nearbyHostId)) {
       clearNearbyReconnectTimer();
       void resumeNearbyTransport();
     }

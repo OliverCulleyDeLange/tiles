@@ -114,6 +114,12 @@ public class NearbyConnectionsPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void stopAdvertising(PluginCall call) {
+        client.stopAdvertising();
+        call.resolve();
+    }
+
+    @PluginMethod
     public void startDiscovery(PluginCall call) {
         client.stopDiscovery();
         client.startDiscovery(SERVICE_ID, discovery,

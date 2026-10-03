@@ -9,6 +9,7 @@ interface NearbyConnectionsPlugin {
   requestPermissions(options?: { permissions?: string[] }): Promise<Record<string, string>>;
   ensurePermissions(): Promise<void>;
   startAdvertising(options: { name: string }): Promise<void>;
+  stopAdvertising(): Promise<void>;
   startDiscovery(options: { name: string }): Promise<void>;
   stopDiscovery(): Promise<void>;
   setKeepAwake(options: { enabled: boolean }): Promise<void>;

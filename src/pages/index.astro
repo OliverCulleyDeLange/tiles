@@ -20,7 +20,7 @@
         <label for="player-name">Player name</label>
         <div class="name-row">
           <input id="player-name" data-name-input maxlength="18" autocomplete="nickname" required />
-          <button type="submit" data-enter-lobby>Create lobby</button>
+          <button type="submit" data-enter-lobby>Create online game</button>
         </div>
       </form>
       <section class="saved-games" data-saved-games hidden>
@@ -29,13 +29,14 @@
         <div class="saved-game-list" data-saved-game-list></div>
       </section>
       <div class="nearby-entry" data-nearby-entry hidden>
-        <span>or start a local game on nearby devices</span>
-        <div>
-          <button type="button" data-nearby-host>Host local game</button>
-          <button type="button" data-nearby-join>Join local game</button>
+        <span>Local players nearby</span>
+        <div class="nearby-endpoints" data-nearby-endpoints>
+          <p>Searching for players…</p>
         </div>
+        <button type="button" class="nearby-start" data-nearby-start disabled>Start local game</button>
+        <small data-nearby-status>Nearby players are selected automatically. Tap one to exclude them.</small>
       </div>
-      <p class="room-note" data-room-note>A private room link will be created · 2–8 players</p>
+      <p class="room-note" data-room-note>Online games use a private invite link · 2–8 players</p>
     </section>
 
     <section class="lobby-card" data-view="lobby" hidden>
@@ -129,14 +130,6 @@
       </div>
     </dialog>
 
-    <dialog class="nearby-dialog" data-nearby-dialog>
-      <button type="button" class="dialog-close" data-nearby-close aria-label="Close">×</button>
-      <p class="eyebrow">Offline nearby play</p>
-      <h2 data-nearby-title>Finding games…</h2>
-      <p data-nearby-status>Keep Bluetooth and Wi-Fi enabled.</p>
-      <div class="nearby-endpoints" data-nearby-endpoints></div>
-    </dialog>
-
     <div class="update-notice" data-update-notice role="status" hidden>
       <span>A new version of Tiles is ready.</span>
       <button type="button" data-update-now>Update now</button>
@@ -186,8 +179,16 @@
   .room-note, .lobby-help { margin: 1rem 0 0; color: #6b6044; font-size: .88rem; }
   .nearby-entry { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #c8bb8e; text-align: center; }
   .nearby-entry > span { display: block; margin-bottom: .55rem; color: #6b6044; font-size: .78rem; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
-  .nearby-entry > div { display: grid; grid-template-columns: 1fr 1fr; gap: .55rem; }
-  .nearby-entry button { min-height: 2.8rem; border: 2px solid var(--tr-ink); border-radius: 9px; background: #fff; color: var(--tr-ink); box-shadow: 2px 2px 0 var(--tr-ink); font-weight: 800; }
+  .nearby-entry small { display: block; margin-top: .55rem; color: #6b6044; font-size: .74rem; line-height: 1.35; }
+  .nearby-entry button { min-height: 2.8rem; border: 2px solid var(--tr-ink); border-radius: 9px; color: var(--tr-ink); box-shadow: 2px 2px 0 var(--tr-ink); font-weight: 800; cursor: pointer; }
+  .nearby-entry button:disabled { opacity: .5; box-shadow: none; cursor: default; }
+  .nearby-start { width: 100%; margin-top: .65rem; background: var(--tr-yellow); }
+  .nearby-endpoints { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: .5rem; }
+  .nearby-endpoints p { grid-column: 1 / -1; margin: .25rem 0; color: #6b6044; font-size: .82rem; }
+  .nearby-endpoints button { display: grid; place-items: center; gap: .3rem; padding: .65rem .4rem; background: #fff; }
+  .nearby-endpoints button::before { content: ''; width: 2.4rem; height: 2.4rem; border: 2px solid var(--tr-ink); border-radius: 50%; background: #ded8bd; }
+  .nearby-endpoints button.is-selected { background: #fff6bf; }
+  .nearby-endpoints button.is-selected::before { background: #55cf83; box-shadow: inset 0 0 0 6px #d8f8e3; }
   .lobby-card header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
   .lobby-card header > div { min-width: 0; }
   .lobby-card h1 { font-size: clamp(2.3rem, 7vw, 4rem); }
@@ -265,9 +266,9 @@
   .rack-slot { flex: 0 0 48px; width: 48px; height: 48px; }
   .rack-slot:empty { border: 1px dashed rgba(255,255,255,.16); border-radius: 6px; }
   .rack-slot > .letter-tile { display: grid; }
-  .nearby-dialog, .game-menu-dialog { width: min(520px, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; border: 3px solid var(--tr-ink); border-radius: 18px; background: var(--tr-cream); color: var(--tr-ink); padding: 1.4rem; box-shadow: 9px 9px 0 var(--tr-ink); }
-  .nearby-dialog::backdrop, .game-menu-dialog::backdrop { background: rgba(23,21,15,.65); backdrop-filter: blur(4px); }
-  .nearby-dialog h2, .game-menu-dialog h2 { margin: 0 0 .5rem; font: 900 2rem/1 Georgia, serif; }
+  .game-menu-dialog { width: min(520px, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; border: 3px solid var(--tr-ink); border-radius: 18px; background: var(--tr-cream); color: var(--tr-ink); padding: 1.4rem; box-shadow: 9px 9px 0 var(--tr-ink); }
+  .game-menu-dialog::backdrop { background: rgba(23,21,15,.65); backdrop-filter: blur(4px); }
+  .game-menu-dialog h2 { margin: 0 0 .5rem; font: 900 2rem/1 Georgia, serif; }
   .dialog-close { position: absolute; top: .6rem; right: .7rem; border: 0; background: transparent; color: var(--tr-ink); font-size: 1.7rem; cursor: pointer; }
   .game-menu-actions { display: grid; gap: .7rem; margin-top: 1.2rem; }
   .game-menu-actions button { display: grid; gap: .3rem; width: 100%; padding: .9rem; border: 2px solid var(--tr-ink); border-radius: 10px; color: var(--tr-ink); box-shadow: 3px 3px 0 var(--tr-ink); text-align: left; cursor: pointer; }
@@ -276,8 +277,6 @@
   .new-game-action { background: var(--tr-yellow); }
   .home-action { background: #fff; }
   .game-menu-actions button:disabled { opacity: .45; box-shadow: none; cursor: default; }
-  .nearby-endpoints { display: grid; gap: .5rem; margin-top: 1rem; }
-  .nearby-endpoints button { padding: .8rem; border: 2px solid var(--tr-ink); border-radius: 9px; background: var(--tr-yellow); color: var(--tr-ink); font-weight: 800; cursor: pointer; }
   .update-notice { position: fixed; z-index: 300; top: max(.75rem, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: .75rem; width: max-content; max-width: calc(100vw - 1.5rem); padding: .6rem .65rem .6rem .9rem; border: 2px solid var(--tr-ink); border-radius: 11px; background: #fffdf3; color: var(--tr-ink); box-shadow: 4px 4px 0 var(--tr-ink); font-size: .9rem; font-weight: 800; }
   .update-notice[hidden] { display: none; }
   .update-notice button { flex: 0 0 auto; min-height: 2.5rem; padding: .55rem .75rem; border: 2px solid var(--tr-ink); border-radius: 8px; background: var(--tr-yellow); color: var(--tr-ink); font: 800 .85rem/1 inherit; cursor: pointer; }
@@ -323,7 +322,7 @@
     .board-controls button { width: 2.5rem; height: 2.5rem; }
     .rack-actions, .dump-button, .menu-button { width: 76px; max-width: 76px; }
     .dump-button small { display: none; }
-    .nearby-dialog, .game-menu-dialog { width: calc(100vw - 1rem); max-height: calc(100dvh - 1rem); padding: 1rem; border-radius: 14px; box-shadow: 4px 4px 0 var(--tr-ink); }
+    .game-menu-dialog { width: calc(100vw - 1rem); max-height: calc(100dvh - 1rem); padding: 1rem; border-radius: 14px; box-shadow: 4px 4px 0 var(--tr-ink); }
     .update-notice { justify-content: space-between; width: calc(100vw - 1.25rem); }
     .connection-notice { justify-content: space-between; width: calc(100vw - 1.25rem); }
   }
