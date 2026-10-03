@@ -29,10 +29,10 @@
         <div class="saved-game-list" data-saved-game-list></div>
       </section>
       <div class="nearby-entry" data-nearby-entry hidden>
-        <span>or play with devices nearby</span>
+        <span>or start a local game on nearby devices</span>
         <div>
-          <button type="button" data-nearby-host>Host nearby</button>
-          <button type="button" data-nearby-join>Join nearby</button>
+          <button type="button" data-nearby-host>Host local game</button>
+          <button type="button" data-nearby-join>Join local game</button>
         </div>
       </div>
       <p class="room-note" data-room-note>A private room link will be created · 2–8 players</p>
@@ -283,6 +283,7 @@
   .update-notice button { flex: 0 0 auto; min-height: 2.5rem; padding: .55rem .75rem; border: 2px solid var(--tr-ink); border-radius: 8px; background: var(--tr-yellow); color: var(--tr-ink); font: 800 .85rem/1 inherit; cursor: pointer; }
   .connection-notice { position: fixed; z-index: 290; top: max(.75rem, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: .75rem; width: max-content; max-width: calc(100vw - 1.5rem); padding: .6rem .65rem .6rem .9rem; border: 2px solid var(--tr-ink); border-radius: 11px; background: #ffb0a3; color: var(--tr-ink); box-shadow: 4px 4px 0 var(--tr-ink); font-size: .9rem; font-weight: 800; }
   .connection-notice[hidden] { display: none; }
+  .entry-card:not([hidden]) ~ .connection-notice { display: none; }
   .connection-notice button { flex: 0 0 auto; min-height: 2.5rem; padding: .55rem .75rem; border: 2px solid var(--tr-ink); border-radius: 8px; background: #fffdf3; color: var(--tr-ink); font: 800 .85rem/1 inherit; cursor: pointer; }
   .connection-notice button:disabled { opacity: .55; cursor: default; }
   .tiles[data-connection='offline'] .update-notice { top: calc(max(.75rem, env(safe-area-inset-top)) + 4.5rem); }

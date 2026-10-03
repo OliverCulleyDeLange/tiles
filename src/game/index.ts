@@ -15,7 +15,7 @@ import {
   type ServerMessage,
   type Tile,
 } from './protocol';
-import { LocalRoomHost } from './local-room';
+import { LocalRoomHost, type StoredLocalRoom } from './local-room';
 import { NearbyConnections, isNativeNearby, type NearbyEndpoint } from './nearby';
 import { gunzipSync } from 'fflate';
 import QRCode from 'qrcode';
@@ -35,6 +35,7 @@ interface Camera { x: number; y: number; scale: number; rotation: number }
 interface Gesture { center: Point; distance: number; angle: number; camera: Camera; world?: Point; rotate?: boolean }
 interface FoundWord { text: string; tileIds: string[] }
 interface SavedGame {
+  kind: 'online';
   room: string;
   name: string;
   phase: RoomSnapshot['phase'];
@@ -43,6 +44,7 @@ interface SavedGame {
 }
 
 const SAVED_GAMES_KEY = 'tiles-saved-games-v1';
+const LOCAL_GAME_KEY = 'tiles-local-game-v1';
 const MAX_SAVED_GAMES = 8;
 
 const dictionaryFile = (name: string) => `${DICTIONARY_BASE}/${name}.txt${ANDROID_NATIVE ? '' : '.gz'}`;
@@ -110,7 +112,8 @@ export function createTiles(root: HTMLElement): void {
 
   const params = new URLSearchParams(location.search);
   let roomName = sanitizeRoom(params.get('room'));
-  const server = location.hostname === 'localhost' || location.hostname === '127.0.0.1'
+  const server = !Capacitor.isNativePlatform()
+    && (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
     ? 'ws://localhost:8788'
     : PRODUCTION_SERVER.replace(/^http/, 'ws');
   roomLabels.forEach(label => { label.textContent = roomName; });
@@ -175,8 +178,9 @@ export function createTiles(root: HTMLElement): void {
         if (!candidate || typeof candidate !== 'object') return [];
         const record = candidate as Partial<SavedGame>;
         const savedRoom = sanitizeRoom(record.room);
-        if (!savedRoom || typeof record.name !== 'string' || !['lobby', 'playing', 'review', 'finished'].includes(record.phase ?? '')) return [];
+        if (!savedRoom || savedRoom === 'nearby' || typeof record.name !== 'string' || !['lobby', 'playing', 'review', 'finished'].includes(record.phase ?? '')) return [];
         return [{
+          kind: 'online' as const,
           room: savedRoom,
           name: sanitizeName(record.name),
           phase: record.phase as SavedGame['phase'],
@@ -193,7 +197,7 @@ export function createTiles(root: HTMLElement): void {
           if (!key?.startsWith('tiles-session:')) continue;
           const savedRoom = sanitizeRoom(key.slice('tiles-session:'.length));
           if (!savedRoom || savedRoom === 'nearby' || records.some(record => record.room === savedRoom)) continue;
-          records.push({ room: savedRoom, name: fallbackName, phase: 'playing', playerNames: [], updatedAt: 0 });
+          records.push({ kind: 'online', room: savedRoom, name: fallbackName, phase: 'playing', playerNames: [], updatedAt: 0 });
         }
       }
       return records.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_SAVED_GAMES);
@@ -206,12 +210,28 @@ export function createTiles(root: HTMLElement): void {
     localStorage.setItem(SAVED_GAMES_KEY, JSON.stringify(records.slice(0, MAX_SAVED_GAMES)));
   }
 
+  function readLocalGame(): StoredLocalRoom | null {
+    try {
+      const value = JSON.parse(localStorage.getItem(LOCAL_GAME_KEY) ?? 'null') as Partial<StoredLocalRoom> | null;
+      if (!value || value.version !== 1 || !Array.isArray(value.players) || typeof value.updatedAt !== 'number') return null;
+      if (!['lobby', 'playing', 'review', 'finished'].includes(value.phase ?? '') || !isDictionaryId(value.dictionary)) return null;
+      return value as StoredLocalRoom;
+    } catch {
+      return null;
+    }
+  }
+
+  function saveLocalGame(value: StoredLocalRoom): void {
+    localStorage.setItem(LOCAL_GAME_KEY, JSON.stringify(value));
+  }
+
   function rememberGame(room: RoomSnapshot): void {
     if (connectionMode !== 'online' || !roomName) return;
     const records = readSavedGames().filter(record => record.room !== roomName);
     const me = room.players.find(player => player.id === myId);
     const name = sanitizeName(me?.name ?? onlineName);
     if (name && localStorage.getItem(sessionKey())) records.unshift({
+      kind: 'online',
       room: roomName,
       name,
       phase: room.phase,
@@ -222,21 +242,47 @@ export function createTiles(root: HTMLElement): void {
   }
 
   function renderSavedGames(): void {
+    const local = roomName ? null : readLocalGame();
     const records = roomName ? [] : readSavedGames();
     savedGameList.replaceChildren();
-    savedGames.hidden = records.length === 0;
+    savedGames.hidden = !local && records.length === 0;
+    if (local) {
+      const item = document.createElement('div');
+      item.className = 'saved-game';
+      const open = document.createElement('button');
+      open.type = 'button';
+      open.className = 'saved-game-open';
+      open.dataset.savedKind = 'local';
+      const ownToken = localStorage.getItem('tiles-session:nearby');
+      const me = local.players.find(player => player.resumeToken === ownToken);
+      open.dataset.savedName = me?.name ?? local.players.find(player => player.id === local.hostId)?.name ?? '';
+      const title = document.createElement('strong');
+      title.textContent = `Local · ${local.players.map(player => player.name).join(', ')}`;
+      const detail = document.createElement('span');
+      detail.textContent = `On this device · ${local.phase === 'finished' ? 'Finished' : local.phase === 'playing' ? 'In progress' : 'In lobby'} · ${new Date(local.updatedAt).toLocaleString()}`;
+      open.append(title, detail);
+      const forget = document.createElement('button');
+      forget.type = 'button';
+      forget.className = 'saved-game-forget';
+      forget.dataset.forgetLocal = 'true';
+      forget.setAttribute('aria-label', 'Forget local game');
+      forget.textContent = '×';
+      item.append(open, forget);
+      savedGameList.append(item);
+    }
     for (const record of records) {
       const item = document.createElement('div');
       item.className = 'saved-game';
       const open = document.createElement('button');
       open.type = 'button';
       open.className = 'saved-game-open';
+      open.dataset.savedKind = 'online';
       open.dataset.savedRoom = record.room;
       open.dataset.savedName = record.name;
       const title = document.createElement('strong');
       title.textContent = record.playerNames.length ? record.playerNames.join(', ') : `Room ${record.room}`;
       const detail = document.createElement('span');
-      detail.textContent = `${record.phase === 'finished' ? 'Winner called · finish your grid' : record.phase === 'review' ? 'Finishing' : record.phase === 'playing' ? 'In progress' : 'In lobby'} · ${new Date(record.updatedAt).toLocaleString()}`;
+      detail.textContent = `Online · ${record.phase === 'finished' ? 'Winner called · finish your grid' : record.phase === 'review' ? 'Finishing' : record.phase === 'playing' ? 'In progress' : 'In lobby'} · ${new Date(record.updatedAt).toLocaleString()}`;
       open.append(title, detail);
       const forget = document.createElement('button');
       forget.type = 'button';
@@ -275,6 +321,10 @@ export function createTiles(root: HTMLElement): void {
   }
 
   function connectionLost(message: string): void {
+    if (!connectionMode || (!state && !nameGate.hidden)) {
+      connectionRestored();
+      return;
+    }
     root.dataset.connection = 'offline';
     connectionMessage.textContent = message;
     connectionNotice.hidden = false;
@@ -575,7 +625,7 @@ export function createTiles(root: HTMLElement): void {
       send({ t: 'hello', v: PROTOCOL_VERSION, name: nearbyName, resumeToken });
     });
     await NearbyConnections.addListener('disconnected', endpoint => {
-      if (localHost) {
+      if (connectionMode === 'nearby-host' && localHost) {
         localHost.disconnect(endpoint.endpointId);
         show(`${endpoint.name} disconnected. Waiting for them to rejoin…`, 'bad');
         scheduleNearbyTransport(0);
@@ -595,9 +645,7 @@ export function createTiles(root: HTMLElement): void {
     });
   }
 
-  async function hostNearby(): Promise<void> {
-    const name = requireNearbyName();
-    if (!name) return;
+  async function startNearbyHost(name: string, restored?: StoredLocalRoom): Promise<void> {
     try {
       await requestNearbyPermissions();
       connectionMode = 'nearby-host';
@@ -611,19 +659,42 @@ export function createTiles(root: HTMLElement): void {
       await NearbyConnections.setKeepAwake({ enabled: true });
       await NearbyConnections.startAdvertising({ name });
       roomName = 'nearby';
+      if (!restored) {
+        localStorage.removeItem(LOCAL_GAME_KEY);
+        localStorage.removeItem('tiles-session:nearby');
+      }
       roomLabels.forEach(label => { label.textContent = 'Nearby'; });
       onlineInvite.hidden = true;
-      lobbyHelp.textContent = 'Friends can join from the nearby-play option. Keep Bluetooth and Wi-Fi enabled.';
+      lobbyHelp.textContent = 'This is a local, device-to-device game. Friends can join from nearby play. Keep Bluetooth and Wi-Fi enabled.';
       localHost = new LocalRoomHost((peerId, message) => {
         if (peerId === localPeerId) handleServerMessage(message);
         else sendNearby(peerId, message);
-      });
+      }, saveLocalGame, restored);
       transportSend = message => localHost?.receive(localPeerId, message as ClientMessage);
-      localHost.receive(localPeerId, { t: 'hello', v: PROTOCOL_VERSION, name });
-      show('Nearby lobby ready. Friends can discover you now.', 'good');
+      const resumeToken = restored ? localStorage.getItem(sessionKey()) ?? undefined : undefined;
+      localHost.receive(localPeerId, { t: 'hello', v: PROTOCOL_VERSION, name, resumeToken });
+      show(restored ? 'Local game restored. Friends can rejoin now.' : 'Local lobby ready. Friends can discover you now.', 'good');
     } catch {
       show('Nearby play needs Bluetooth, Wi-Fi and permission to find devices.', 'bad');
     }
+  }
+
+  async function hostNearby(): Promise<void> {
+    const name = requireNearbyName();
+    if (name) await startNearbyHost(name);
+  }
+
+  async function continueLocalGame(name: string): Promise<void> {
+    const restored = readLocalGame();
+    if (!restored) {
+      renderSavedGames();
+      show('That local game is no longer stored on this device.', 'bad');
+      return;
+    }
+    nearbyName = name;
+    nameInput.value = name;
+    localStorage.setItem('tiles-name', name);
+    await startNearbyHost(name, restored);
   }
 
   async function joinNearby(): Promise<void> {
@@ -647,7 +718,7 @@ export function createTiles(root: HTMLElement): void {
       roomName = 'nearby';
       roomLabels.forEach(label => { label.textContent = 'Nearby'; });
       onlineInvite.hidden = true;
-      lobbyHelp.textContent = 'This game is connected directly to the nearby host—no internet or invite link needed.';
+      lobbyHelp.textContent = 'This is a local game connected directly to the nearby host—no internet or invite link needed.';
       nearbyEndpointMap.clear();
       nearbyTitle.textContent = 'Finding nearby games…';
       nearbyStatus.textContent = 'Keep Bluetooth and Wi-Fi enabled.';
@@ -1303,12 +1374,38 @@ export function createTiles(root: HTMLElement): void {
   });
   savedGameList.addEventListener('click', event => {
     const target = event.target as HTMLElement;
-    const open = target.closest<HTMLButtonElement>('[data-saved-room]');
+    const open = target.closest<HTMLButtonElement>('[data-saved-kind]');
+    if (open?.dataset.savedKind === 'local' && open.dataset.savedName) {
+      savedGameList.querySelectorAll<HTMLButtonElement>('button').forEach(button => { button.disabled = true; });
+      const title = open.querySelector('strong');
+      if (title) title.textContent = 'Loading local game…';
+      void continueLocalGame(sanitizeName(open.dataset.savedName));
+      return;
+    }
     if (open?.dataset.savedRoom && open.dataset.savedName) {
-      localStorage.setItem('tiles-name', open.dataset.savedName);
+      const savedRoom = sanitizeRoom(open.dataset.savedRoom);
+      const savedName = sanitizeName(open.dataset.savedName);
+      if (!savedRoom || !savedName) return;
+      roomName = savedRoom;
+      nameInput.value = savedName;
+      localStorage.setItem('tiles-name', savedName);
       const url = new URL(location.href);
-      url.searchParams.set('room', open.dataset.savedRoom);
-      location.assign(url);
+      url.searchParams.set('room', savedRoom);
+      history.replaceState(null, '', url);
+      roomLabels.forEach(label => { label.textContent = savedRoom; });
+      roomNote.textContent = `Private room ${savedRoom} · reconnecting…`;
+      savedGameList.querySelectorAll<HTMLButtonElement>('button').forEach(button => { button.disabled = true; });
+      const title = open.querySelector('strong');
+      if (title) title.textContent = 'Loading saved game…';
+      enterLobby.disabled = true;
+      connectOnline(savedName);
+      return;
+    }
+    const forgetLocal = target.closest<HTMLButtonElement>('[data-forget-local]');
+    if (forgetLocal) {
+      localStorage.removeItem(LOCAL_GAME_KEY);
+      localStorage.removeItem('tiles-session:nearby');
+      renderSavedGames();
       return;
     }
     const forget = target.closest<HTMLButtonElement>('[data-forget-room]');
@@ -1495,10 +1592,18 @@ export function createTiles(root: HTMLElement): void {
     stopOnlineTransport();
     clearNearbyReconnectTimer();
     transportSend = null;
+    localHost = null;
+    nearbyHostId = null;
+    nearbyHostName = '';
+    nearbyAutoReconnect = false;
+    nearbyConnectingId = null;
+    state = null;
+    connectionRestored();
     if (isNativeNearby()) await NearbyConnections.stop().catch(() => undefined);
     if (forgetLobby && leavingRoom) {
       localStorage.removeItem(`tiles-session:${leavingRoom}`);
       writeSavedGames(readSavedGames().filter(record => record.room !== leavingRoom));
+      if (leavingRoom === 'nearby') localStorage.removeItem(LOCAL_GAME_KEY);
     }
     location.assign(import.meta.env.BASE_URL);
   }

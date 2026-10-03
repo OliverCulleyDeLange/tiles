@@ -25,6 +25,22 @@ interface LocalPlayer {
   voted: boolean;
 }
 
+export interface StoredLocalRoom {
+  version: 1;
+  phase: RoomSnapshot['phase'];
+  hostId: string;
+  players: LocalPlayer[];
+  bag: Tile[];
+  peel: number;
+  dictionary: DictionaryId;
+  winnerId?: string;
+  claimantId?: string;
+  reviewBoard?: PlacedTile[];
+  reviewEndsAt?: number;
+  rottenCalled: boolean;
+  updatedAt: number;
+}
+
 const DISTRIBUTION: Record<string, number> = {
   A: 13, B: 3, C: 3, D: 6, E: 18, F: 3, G: 4, H: 3, I: 12, J: 2, K: 2,
   L: 5, M: 3, N: 8, O: 11, P: 3, Q: 2, R: 9, S: 6, T: 9, U: 6, V: 3,
@@ -44,10 +60,31 @@ export class LocalRoomHost {
   private reviewEndsAt?: number;
   private rottenCalled = false;
 
-  constructor(private readonly deliver: (peerId: string, message: ServerMessage) => void) {}
+  constructor(
+    private readonly deliver: (peerId: string, message: ServerMessage) => void,
+    private readonly onChange?: (state: StoredLocalRoom) => void,
+    restored?: StoredLocalRoom,
+  ) {
+    if (!restored) return;
+    this.phase = restored.phase;
+    this.hostId = restored.hostId;
+    this.players = restored.players.map(player => ({ ...player, connected: false, hand: [...player.hand], board: [...player.board] }));
+    this.bag = [...restored.bag];
+    this.peel = restored.peel;
+    this.dictionary = restored.dictionary;
+    this.winnerId = restored.winnerId;
+    this.claimantId = restored.claimantId;
+    this.reviewBoard = restored.reviewBoard ? [...restored.reviewBoard] : undefined;
+    this.reviewEndsAt = restored.reviewEndsAt;
+    this.rottenCalled = restored.rottenCalled;
+  }
 
   receive(peerId: string, message: ClientMessage): void {
-    if (message.t === 'hello') return this.join(peerId, message.name, message.resumeToken);
+    if (message.t === 'hello') {
+      this.join(peerId, message.name, message.resumeToken);
+      this.changed();
+      return;
+    }
     const player = this.players.find(value => value.id === peerId);
     if (!player) return;
     if (message.t === 'dictionary') this.setDictionary(peerId, message.dictionary);
@@ -58,6 +95,7 @@ export class LocalRoomHost {
     else if (message.t === 'dump') this.dump(player, message.tileId);
     else if (message.t === 'review') this.review(player, message.rotten);
     else if (message.t === 'ping') this.deliver(peerId, { t: 'pong' });
+    if (message.t !== 'ping') this.changed();
   }
 
   disconnect(peerId: string): void {
@@ -66,11 +104,35 @@ export class LocalRoomHost {
     if (this.phase !== 'lobby') {
       this.players[index].connected = false;
       this.broadcastRoom();
+      this.changed();
       return;
     }
     this.players.splice(index, 1);
     if (this.hostId === peerId) this.hostId = this.players[0]?.id ?? '';
     this.broadcastRoom();
+    this.changed();
+  }
+
+  exportState(): StoredLocalRoom {
+    return {
+      version: 1,
+      phase: this.phase,
+      hostId: this.hostId,
+      players: this.players.map(player => ({ ...player, hand: [...player.hand], board: [...player.board] })),
+      bag: [...this.bag],
+      peel: this.peel,
+      dictionary: this.dictionary,
+      winnerId: this.winnerId,
+      claimantId: this.claimantId,
+      reviewBoard: this.reviewBoard ? [...this.reviewBoard] : undefined,
+      reviewEndsAt: this.reviewEndsAt,
+      rottenCalled: this.rottenCalled,
+      updatedAt: Date.now(),
+    };
+  }
+
+  private changed(): void {
+    this.onChange?.(this.exportState());
   }
 
   private join(peerId: string, rawName: string, resumeToken?: string): void {

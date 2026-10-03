@@ -161,16 +161,21 @@ export class TilesRoom extends DurableObject<Env> {
       session.name = returning.name;
       session.joined = true;
       returning.connected = true;
+      // Close an older connection before attaching this player identity to the
+      // new socket. Durable Object WebSocket wrappers are not guaranteed to be
+      // reference-identical across getWebSockets() calls, so comparing them
+      // after serialization can accidentally close the newly resumed socket.
+      for (const candidate of this.ctx.getWebSockets()) {
+        const existing = this.session(candidate);
+        if (existing?.joined && existing.id === returning.id) {
+          try { candidate.close(1000, 'Session resumed elsewhere'); } catch {}
+        }
+      }
       ws.serializeAttachment(session);
       await this.save(game);
       this.send(ws, { t: 'welcome', id: returning.id, resumeToken, room: this.snapshot(game) });
       this.send(ws, { t: 'hand', tiles: returning.hand, replace: true });
       this.broadcastRoom(game, ws);
-      for (const candidate of this.ctx.getWebSockets()) {
-        if (candidate !== ws && this.session(candidate)?.id === returning.id) {
-          try { candidate.close(1000, 'Session resumed elsewhere'); } catch {}
-        }
-      }
       return;
     }
     if (game.phase !== 'lobby') return this.send(ws, { t: 'error', message: 'A game is already in progress.' });
