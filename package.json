@@ -8,6 +8,7 @@
     "build": "astro build",
     "check": "astro check",
     "preview": "astro preview",
+    "dictionaries:build": "node scripts/build-language-dictionaries.mjs",
     "native:prepare": "npm run build && node scripts/prepare-native.mjs && cap copy",
     "native:ios": "npm run native:prepare && cap open ios",
     "native:android": "npm run native:prepare && cap open android",

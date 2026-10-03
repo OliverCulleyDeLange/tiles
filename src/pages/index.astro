@@ -52,6 +52,11 @@
         <select data-dictionary>
           <option value="scowl-us">SCOWL · American English</option>
           <option value="scowl-gb">SCOWL · British English</option>
+          <option value="de">Deutsch · German</option>
+          <option value="es">Español · Spanish</option>
+          <option value="it">Italiano · Italian</option>
+          <option value="fr">Français · French</option>
+          <option value="pt">Português · Portuguese</option>
         </select>
       </label>
       <div class="lobby-invite" data-online-invite>
@@ -121,17 +126,6 @@
       </div>
     </dialog>
 
-    <dialog class="review-dialog" data-review>
-      <p class="eyebrow">Final check</p>
-      <h2 data-review-title>BANANAS!</h2>
-      <p>Check every word. Proper nouns, abbreviations and misspellings are rotten.</p>
-      <div class="review-board" data-review-board></div>
-      <div class="review-actions">
-        <button type="button" data-review-rotten class="rotten">Rotten Banana</button>
-        <button type="button" data-review-accept class="accept">Looks good</button>
-      </div>
-    </dialog>
-
     <dialog class="nearby-dialog" data-nearby-dialog>
       <button type="button" class="dialog-close" data-nearby-close aria-label="Close">×</button>
       <p class="eyebrow">Offline nearby play</p>
@@ -172,7 +166,7 @@
   .intro { max-width: 27rem; font-size: 1.15rem; line-height: 1.5; }
   .tiles label { display: block; margin-bottom: .45rem; font-weight: 800; }
   .name-row { display: grid; grid-template-columns: 1fr auto; gap: .6rem; }
-  .name-row input, .name-row button, .primary-action, .dump-button, .menu-button, .review-actions button { min-height: 3.2rem; border: 2px solid var(--tr-ink); border-radius: 10px; font: 800 1rem/1 inherit; }
+  .name-row input, .name-row button, .primary-action, .dump-button, .menu-button { min-height: 3.2rem; border: 2px solid var(--tr-ink); border-radius: 10px; font: 800 1rem/1 inherit; }
   .name-row input { min-width: 0; padding: .7rem .9rem; background: #fff; color: var(--tr-ink); caret-color: var(--tr-ink); }
   .name-row button, .primary-action { padding: .7rem 1.1rem; background: var(--tr-yellow); color: var(--tr-ink); box-shadow: 3px 3px 0 var(--tr-ink); cursor: pointer; }
   .saved-games { margin-top: 1.35rem; padding-top: 1.2rem; border-top: 2px solid var(--tr-ink); }
@@ -262,8 +256,10 @@
   .letter-tile.is-dragging { cursor: grabbing; transform: rotate(4deg) scale(1.04); }
   .tile-drag-overlay { z-index: 200; }
   .rack-wrap { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .55rem; align-items: center; min-height: 76px; padding: .42rem max(.6rem, env(safe-area-inset-right)) max(.42rem, env(safe-area-inset-bottom)) max(.6rem, env(safe-area-inset-left)); border-top: 2px solid var(--tr-ink); background: #2c2921; color: white; }
-  .rack { min-height: 40px; display: flex; flex-wrap: wrap; align-content: center; gap: .28rem; }
-  .review-dialog { width: min(700px, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; border: 3px solid var(--tr-ink); border-radius: 18px; background: var(--tr-cream); color: var(--tr-ink); padding: 1.4rem; box-shadow: 9px 9px 0 var(--tr-ink); }
+  .rack { min-height: 48px; display: flex; flex-wrap: wrap; align-content: center; gap: .28rem; }
+  .rack-slot { flex: 0 0 48px; width: 48px; height: 48px; }
+  .rack-slot:empty { border: 1px dashed rgba(255,255,255,.16); border-radius: 6px; }
+  .rack-slot > .letter-tile { display: grid; }
   .nearby-dialog, .game-menu-dialog { width: min(520px, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; border: 3px solid var(--tr-ink); border-radius: 18px; background: var(--tr-cream); color: var(--tr-ink); padding: 1.4rem; box-shadow: 9px 9px 0 var(--tr-ink); }
   .nearby-dialog::backdrop, .game-menu-dialog::backdrop { background: rgba(23,21,15,.65); backdrop-filter: blur(4px); }
   .nearby-dialog h2, .game-menu-dialog h2 { margin: 0 0 .5rem; font: 900 2rem/1 Georgia, serif; }
@@ -277,14 +273,6 @@
   .game-menu-actions button:disabled { opacity: .45; box-shadow: none; cursor: default; }
   .nearby-endpoints { display: grid; gap: .5rem; margin-top: 1rem; }
   .nearby-endpoints button { padding: .8rem; border: 2px solid var(--tr-ink); border-radius: 9px; background: var(--tr-yellow); color: var(--tr-ink); font-weight: 800; cursor: pointer; }
-  .review-dialog::backdrop { background: rgba(23,21,15,.65); backdrop-filter: blur(4px); }
-  .review-dialog h2 { margin: 0; font: 900 2.4rem/1 Georgia, serif; }
-  .review-board { display: grid; grid-auto-columns: 28px; grid-auto-rows: 28px; justify-content: center; margin: 1rem auto; overflow: auto; }
-  .review-board span { display: grid; place-items: center; border: 1px solid var(--tr-ink); background: white; font: 800 1rem/1 Georgia, serif; }
-  .review-actions { display: flex; justify-content: flex-end; gap: .7rem; }
-  .review-actions button { padding: .6rem .9rem; cursor: pointer; }
-  .review-actions .rotten { background: var(--tr-coral); color: #fff; }
-  .review-actions .accept { background: #a9f0bd; color: var(--tr-ink); }
   .update-notice { position: fixed; z-index: 300; top: max(.75rem, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: .75rem; width: max-content; max-width: calc(100vw - 1.5rem); padding: .6rem .65rem .6rem .9rem; border: 2px solid var(--tr-ink); border-radius: 11px; background: #fffdf3; color: var(--tr-ink); box-shadow: 4px 4px 0 var(--tr-ink); font-size: .9rem; font-weight: 800; }
   .update-notice[hidden] { display: none; }
   .update-notice button { flex: 0 0 auto; min-height: 2.5rem; padding: .55rem .75rem; border: 2px solid var(--tr-ink); border-radius: 8px; background: var(--tr-yellow); color: var(--tr-ink); font: 800 .85rem/1 inherit; cursor: pointer; }
@@ -328,8 +316,7 @@
     .board-controls button { width: 2.5rem; height: 2.5rem; }
     .rack-actions, .dump-button, .menu-button { width: 76px; max-width: 76px; }
     .dump-button small { display: none; }
-    .review-dialog, .nearby-dialog, .game-menu-dialog { width: calc(100vw - 1rem); max-height: calc(100dvh - 1rem); padding: 1rem; border-radius: 14px; box-shadow: 4px 4px 0 var(--tr-ink); }
-    .review-actions { display: grid; grid-template-columns: 1fr 1fr; }
+    .nearby-dialog, .game-menu-dialog { width: calc(100vw - 1rem); max-height: calc(100dvh - 1rem); padding: 1rem; border-radius: 14px; box-shadow: 4px 4px 0 var(--tr-ink); }
     .update-notice { justify-content: space-between; width: calc(100vw - 1.25rem); }
     .connection-notice { justify-content: space-between; width: calc(100vw - 1.25rem); }
   }

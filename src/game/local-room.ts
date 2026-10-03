@@ -1,6 +1,7 @@
 import {
   MAX_PLAYERS,
   createPlayerAreas,
+  isDictionaryId,
   sanitizeBoard,
   sanitizeLayout,
   sanitizeName,
@@ -106,7 +107,7 @@ export class LocalRoomHost {
 
   private setDictionary(peerId: string, dictionary: DictionaryId): void {
     if (this.phase !== 'lobby' || peerId !== this.hostId) return;
-    if (dictionary !== 'scowl-us' && dictionary !== 'scowl-gb') return;
+    if (!isDictionaryId(dictionary)) return;
     this.dictionary = dictionary;
     this.broadcastRoom();
   }
@@ -144,11 +145,14 @@ export class LocalRoomHost {
   }
 
   private layout(player: LocalPlayer, raw: PlacedTile[]): void {
-    if (this.phase !== 'playing' || player.eliminated) return;
+    if ((this.phase !== 'playing' && !(this.phase === 'finished' && player.id !== this.winnerId)) || player.eliminated) return;
     const board = sanitizeLayout(raw, new Set(player.hand.map(tile => tile.id)));
-    if (!board || this.overlapsAnother(player.id, board)) return;
+    if (!board || this.overlapsAnother(player.id, board)) {
+      this.deliver(player.id, { t: 'layout', playerId: player.id, board: player.board });
+      return;
+    }
     player.board = board;
-    this.broadcastRoom();
+    this.broadcastExcept(player.id, { t: 'layout', playerId: player.id, board });
   }
 
   private doPeel(player: LocalPlayer, peel: number, raw: PlacedTile[]): void {
@@ -158,15 +162,13 @@ export class LocalRoomHost {
     player.board = board;
     const active = this.players.filter(value => !value.eliminated);
     if (this.bag.length < active.length) {
-      this.phase = 'review';
-      this.claimantId = player.id;
-      this.reviewBoard = board;
-      this.reviewEndsAt = Date.now() + 15_000;
-      this.rottenCalled = false;
-      active.forEach(value => { value.voted = value.id === player.id; });
-      this.broadcast({ t: 'toast', text: `${player.name} called BANANAS!`, tone: 'plain' });
+      this.phase = 'finished';
+      this.winnerId = player.id;
+      this.claimantId = undefined;
+      this.reviewBoard = undefined;
+      this.reviewEndsAt = undefined;
+      this.broadcast({ t: 'toast', text: `${player.name} is Top Banana!`, tone: 'good' });
       this.broadcastRoom();
-      window.setTimeout(() => this.finishReview(), 15_000);
       return;
     }
     this.peel++;
@@ -240,6 +242,9 @@ export class LocalRoomHost {
 
   private broadcast(message: ServerMessage): void {
     this.players.forEach(player => { if (player.connected) this.deliver(player.id, message); });
+  }
+  private broadcastExcept(playerId: string, message: ServerMessage): void {
+    this.players.forEach(player => { if (player.connected && player.id !== playerId) this.deliver(player.id, message); });
   }
   private broadcastRoom(except?: string): void {
     const message: ServerMessage = { t: 'room', room: this.snapshot() };

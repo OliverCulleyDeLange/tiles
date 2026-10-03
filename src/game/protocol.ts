@@ -1,11 +1,16 @@
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 export const MAX_PLAYERS = 8;
 export const MAX_NAME_LENGTH = 18;
 export const MAX_MESSAGE_BYTES = 16_384;
 export const DEFAULT_ROOM = '';
 export const PLAYER_AREA_WIDTH = 16;
 export const PLAYER_AREA_HEIGHT = 11;
-export type DictionaryId = 'scowl-us' | 'scowl-gb';
+export const DICTIONARY_IDS = ['scowl-us', 'scowl-gb', 'de', 'es', 'it', 'fr', 'pt'] as const;
+export type DictionaryId = typeof DICTIONARY_IDS[number];
+
+export function isDictionaryId(value: unknown): value is DictionaryId {
+  return typeof value === 'string' && (DICTIONARY_IDS as readonly string[]).includes(value);
+}
 
 export interface Tile {
   id: string;
@@ -90,6 +95,7 @@ export type ClientMessage =
 export type ServerMessage =
   | { t: 'welcome'; id: string; resumeToken?: string; room: RoomSnapshot }
   | { t: 'room'; room: RoomSnapshot }
+  | { t: 'layout'; playerId: string; board: PlacedTile[] }
   | { t: 'new-game' }
   | { t: 'hand'; tiles: Tile[]; replace: boolean }
   | { t: 'toast'; text: string; tone?: 'good' | 'bad' | 'plain' }

@@ -3,6 +3,7 @@ import {
   MAX_MESSAGE_BYTES,
   MAX_PLAYERS,
   createPlayerAreas,
+  isDictionaryId,
   PROTOCOL_VERSION,
   sanitizeBoard,
   sanitizeLayout,
@@ -138,29 +139,12 @@ export class TilesRoom extends DurableObject<Env> {
     const game = await this.load();
     if (game.phase === 'review' && (game.reviewEndsAt ?? 0) <= Date.now()) {
       await this.finishReview(game);
-    } else if (game.phase === 'finished') {
-      game.phase = 'lobby';
-      game.bag = [];
-      game.peel = 0;
-      game.winnerId = undefined;
-      game.claimantId = undefined;
-      game.reviewBoard = undefined;
-      game.reviewEndsAt = undefined;
-      game.rottenCalled = false;
-      for (const player of game.players) {
-        player.hand = [];
-        player.board = [];
-        player.area = undefined;
-        player.eliminated = false;
-        player.voted = false;
-      }
-      await this.save(game);
-      this.broadcastRoom(game);
     }
   }
 
   private async hello(ws: WebSocket, session: Session, message: Extract<ClientMessage, { t: 'hello' }>): Promise<void> {
-    if (session.joined || message.v !== PROTOCOL_VERSION) return;
+    if (session.joined) return;
+    if (message.v !== PROTOCOL_VERSION) return this.send(ws, { t: 'error', message: 'This app version is out of date. Update Tiles to reconnect.' });
     const name = sanitizeName(message.name);
     if (!name) return this.send(ws, { t: 'error', message: 'Enter a player name.' });
     const game = await this.load();
@@ -243,7 +227,7 @@ export class TilesRoom extends DurableObject<Env> {
   private async setDictionary(session: Session, dictionary: DictionaryId): Promise<void> {
     const game = await this.load();
     if (game.phase !== 'lobby' || session.id !== game.hostId) return;
-    if (dictionary !== 'scowl-us' && dictionary !== 'scowl-gb') return;
+    if (!isDictionaryId(dictionary)) return;
     game.dictionary = dictionary;
     await this.save(game);
     this.broadcastRoom(game);
@@ -252,19 +236,20 @@ export class TilesRoom extends DurableObject<Env> {
   private async layout(session: Session, raw: PlacedTile[]): Promise<void> {
     const game = await this.load();
     const player = game.players.find(value => value.id === session.id);
-    if (!player || player.eliminated || game.phase !== 'playing') return;
+    if (!player || player.eliminated || (game.phase !== 'playing' && !(game.phase === 'finished' && player.id !== game.winnerId))) return;
     const board = sanitizeLayout(raw, new Set(player.hand.map(tile => tile.id)));
-    if (!board) return;
+    if (!board) return this.sendTo(session.id, { t: 'layout', playerId: player.id, board: player.board ?? [] });
     const occupied = new Set(game.players
       .filter(value => value.id !== player.id)
       .flatMap(value => value.board ?? [])
       .map(tile => `${tile.x},${tile.y}`));
     if (board.some(tile => occupied.has(`${tile.x},${tile.y}`))) {
+      this.sendTo(session.id, { t: 'layout', playerId: player.id, board: player.board ?? [] });
       return this.sendTo(session.id, { t: 'toast', text: 'That space belongs to another player.', tone: 'bad' });
     }
     player.board = board;
     await this.save(game);
-    this.broadcastRoom(game);
+    this.broadcastExceptPlayer(player.id, { t: 'layout', playerId: player.id, board });
   }
 
   private async peel(session: Session, message: Extract<ClientMessage, { t: 'peel' }>): Promise<void> {
@@ -283,16 +268,14 @@ export class TilesRoom extends DurableObject<Env> {
     player.board = board;
     const active = game.players.filter(value => !value.eliminated);
     if (game.bag.length < active.length) {
-      game.phase = 'review';
-      game.claimantId = player.id;
-      game.reviewBoard = board;
-      game.reviewEndsAt = Date.now() + REVIEW_MS;
-      game.rottenCalled = false;
-      for (const candidate of active) candidate.voted = candidate.id === player.id;
+      game.phase = 'finished';
+      game.winnerId = player.id;
+      game.claimantId = undefined;
+      game.reviewBoard = undefined;
+      game.reviewEndsAt = undefined;
       await this.save(game);
-      this.broadcast({ t: 'toast', text: `${player.name} called BANANAS!`, tone: 'plain' });
+      this.broadcast({ t: 'toast', text: `${player.name} is Top Banana!`, tone: 'good' });
       this.broadcastRoom(game);
-      await this.ctx.storage.setAlarm(game.reviewEndsAt);
       return;
     }
     game.peel++;
@@ -363,13 +346,11 @@ export class TilesRoom extends DurableObject<Env> {
       await this.save(game);
       this.broadcast({ t: 'toast', text: `${claimant.name} is a Rotten Banana. Play continues!`, tone: 'bad' });
       this.broadcastRoom(game);
-      if (game.phase === 'finished') await this.ctx.storage.setAlarm(Date.now() + 7_000);
     } else {
       game.phase = 'finished';
       game.winnerId = claimant.id;
       await this.save(game);
       this.broadcastRoom(game);
-      await this.ctx.storage.setAlarm(Date.now() + 7_000);
     }
   }
 
@@ -459,6 +440,15 @@ export class TilesRoom extends DurableObject<Env> {
     const data = JSON.stringify(message);
     for (const ws of this.ctx.getWebSockets()) {
       if (ws === except || !this.session(ws)?.joined) continue;
+      try { ws.send(data); } catch {}
+    }
+  }
+
+  private broadcastExceptPlayer(playerId: string, message: ServerMessage): void {
+    const data = JSON.stringify(message);
+    for (const ws of this.ctx.getWebSockets()) {
+      const session = this.session(ws);
+      if (!session?.joined || session.id === playerId) continue;
       try { ws.send(data); } catch {}
     }
   }

@@ -42,4 +42,5 @@ npm run native:ios
 npm run native:android
 ```
 
-SCOWL word lists are distributed under their own notices in `public/dictionaries/SCOWL-COPYRIGHT.txt`.
+English SCOWL word lists are distributed under their own notices in `public/dictionaries/SCOWL-COPYRIGHT.txt`.
+German, Spanish, Italian, French, and Portuguese word lists are derived from a pinned revision of the LibreOffice dictionaries project. Their source details and original licence notices are included in `public/dictionaries/libreoffice-notices/`. Rebuild them with `npm run dictionaries:build`.
