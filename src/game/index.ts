@@ -153,6 +153,8 @@ export function createTiles(root: HTMLElement): void {
   let nearbyReconnectAttempt = 0;
   let nearbyReconnectTimer: number | null = null;
   let nearbyHelloTimer: number | null = null;
+  let nearbyHomeRefreshTimer: number | null = null;
+  let nearbyHomeGeneration = 0;
   let nearbyName = '';
   let nearbyPermissionAliases: string[] | undefined;
   const selectedNearbyIds = new Set<string>();
@@ -698,6 +700,51 @@ export function createTiles(root: HTMLElement): void {
     nearbyHelloTimer = null;
   }
 
+  function clearNearbyHomeRefreshTimer(invalidate = true): void {
+    if (nearbyHomeRefreshTimer != null) window.clearTimeout(nearbyHomeRefreshTimer);
+    nearbyHomeRefreshTimer = null;
+    if (invalidate) nearbyHomeGeneration += 1;
+  }
+
+  const wait = (milliseconds: number): Promise<void> => new Promise(resolve => {
+    window.setTimeout(resolve, milliseconds);
+  });
+
+  function scheduleNearbyHomeRefresh(): void {
+    if (nearbyHomeRefreshTimer != null || connectionMode !== 'nearby-home' || nearbyEndpointMap.size) return;
+    const generation = nearbyHomeGeneration;
+    nearbyHomeRefreshTimer = window.setTimeout(() => {
+      nearbyHomeRefreshTimer = null;
+      if (generation !== nearbyHomeGeneration || connectionMode !== 'nearby-home' || nearbyEndpointMap.size) return;
+      void runNearbyHomeRadios(nearbyName, true, generation);
+    }, 12_000);
+  }
+
+  async function runNearbyHomeRadios(name: string, refresh: boolean, generation: number): Promise<void> {
+    const isCurrent = (): boolean => generation === nearbyHomeGeneration && connectionMode === 'nearby-home';
+    if (!isCurrent()) return;
+    if (refresh) {
+      await NearbyConnections.stopDiscovery().catch(() => undefined);
+      await NearbyConnections.stopAdvertising().catch(() => undefined);
+      if (!isCurrent()) return;
+      await wait(350);
+    }
+
+    // Cross-platform BLE is more reliable when one phone is serving its
+    // advertisement while the other fetches it, rather than both immediately
+    // competing as GATT clients and servers. The second role is added shortly
+    // afterwards so same-platform discovery still works.
+    const android = Capacitor.getPlatform() === 'android';
+    if (android) await NearbyConnections.startDiscovery({ name });
+    else await NearbyConnections.startAdvertising({ name });
+    if (!isCurrent()) return;
+    await wait(5_500);
+    if (!isCurrent()) return;
+    if (android) await NearbyConnections.startAdvertising({ name });
+    else await NearbyConnections.startDiscovery({ name });
+    if (isCurrent()) scheduleNearbyHomeRefresh();
+  }
+
   function sendNearby(endpointId: string, message: object): void {
     void NearbyConnections.send({ endpointIds: [endpointId], payload: JSON.stringify(message) }).catch(() => {
       if (connectionMode === 'nearby-join' && nearbyHostId === endpointId) beginNearbyReconnect();
@@ -999,12 +1046,13 @@ export function createTiles(root: HTMLElement): void {
     nearbyHomeStarting = true;
     nearbyName = name;
     connectionMode = 'nearby-home';
+    clearNearbyHomeRefreshTimer();
+    const generation = nearbyHomeGeneration;
     nearbyStatus.textContent = 'Making you visible and looking for local players…';
     renderNearbyEndpoints();
     try {
       await requestNearbyPermissions();
-      await NearbyConnections.startAdvertising({ name });
-      await NearbyConnections.startDiscovery({ name });
+      await runNearbyHomeRadios(name, false, generation);
       nearbyStatus.textContent = '';
     } catch {
       connectionMode = null;
@@ -1016,6 +1064,7 @@ export function createTiles(root: HTMLElement): void {
   }
 
   function enterNearbyGuest(endpoint: NearbyEndpoint): void {
+    clearNearbyHomeRefreshTimer();
     connectionMode = 'nearby-join';
     clearNearbyReconnectTimer();
     nearbyReconnectAttempt = 0;
@@ -1041,6 +1090,7 @@ export function createTiles(root: HTMLElement): void {
     nearbyEntry.hidden = false;
 
     await NearbyConnections.addListener('endpointFound', endpoint => {
+      if (connectionMode === 'nearby-home') clearNearbyHomeRefreshTimer(false);
       for (const [knownId, known] of nearbyEndpointMap) {
         if (knownId !== endpoint.endpointId && known.name.trim().toLocaleLowerCase() === endpoint.name.trim().toLocaleLowerCase()) {
           nearbyEndpointMap.delete(knownId);
@@ -1073,6 +1123,7 @@ export function createTiles(root: HTMLElement): void {
       nearbyInviteStates.delete(endpoint.endpointId);
       if (nearbyConnectingId === endpoint.endpointId) nearbyConnectingId = null;
       renderNearbyEndpoints();
+      if (connectionMode === 'nearby-home' && nearbyEndpointMap.size === 0) scheduleNearbyHomeRefresh();
       if (state && connectionMode === 'nearby-host') {
         renderLobbyRoster(state);
         renderPlayerDisconnect(state);
@@ -1171,6 +1222,7 @@ export function createTiles(root: HTMLElement): void {
   async function startNearbyHost(name: string, restored?: StoredLocalRoom, inviteIds: string[] = []): Promise<void> {
     try {
       await requestNearbyPermissions();
+      clearNearbyHomeRefreshTimer();
       connectionMode = 'nearby-host';
       nearbyName = name;
       nearbyAutoReconnect = false;
@@ -2442,6 +2494,7 @@ export function createTiles(root: HTMLElement): void {
     stopOnlineTransport();
     clearNearbyReconnectTimer();
     clearNearbyHelloTimer();
+    clearNearbyHomeRefreshTimer();
     transportSend = null;
     localHost = null;
     nearbyInviteStates.clear();
