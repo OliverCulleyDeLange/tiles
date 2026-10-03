@@ -29,6 +29,7 @@ interface LocalPlayer {
 export interface StoredLocalRoom {
   version: 1;
   phase: RoomSnapshot['phase'];
+  resumePhase?: Exclude<RoomSnapshot['phase'], 'lobby'>;
   hostId: string;
   players: LocalPlayer[];
   bag: Tile[];
@@ -50,6 +51,7 @@ const DISTRIBUTION: Record<string, number> = {
 
 export class LocalRoomHost {
   private phase: RoomSnapshot['phase'] = 'lobby';
+  private resumePhase?: Exclude<RoomSnapshot['phase'], 'lobby'>;
   private hostId = '';
   private players: LocalPlayer[] = [];
   private bag: Tile[] = [];
@@ -67,7 +69,8 @@ export class LocalRoomHost {
     restored?: StoredLocalRoom,
   ) {
     if (!restored) return;
-    this.phase = restored.phase;
+    this.resumePhase = restored.resumePhase ?? (restored.phase === 'lobby' ? undefined : restored.phase);
+    this.phase = this.resumePhase ? 'lobby' : restored.phase;
     this.hostId = restored.hostId;
     this.players = restored.players.map(player => ({ ...player, connected: false, hand: [...player.hand], board: [...player.board] }));
     this.bag = [...restored.bag];
@@ -112,6 +115,7 @@ export class LocalRoomHost {
     return {
       version: 1,
       phase: this.phase,
+      resumePhase: this.resumePhase,
       hostId: this.hostId,
       players: this.players.map(player => ({ ...player, hand: [...player.hand], board: [...player.board] })),
       bag: [...this.bag],
@@ -157,6 +161,7 @@ export class LocalRoomHost {
       return;
     }
     if (this.phase !== 'lobby') return this.deliver(peerId, { t: 'error', message: 'A game is already in progress.' });
+    if (this.resumePhase) return this.deliver(peerId, { t: 'error', message: 'Only players from this saved game can rejoin.' });
     if (this.players.length >= MAX_PLAYERS) return this.deliver(peerId, { t: 'error', message: 'This nearby game is full.' });
     const existing = new Set(this.players.map(player => player.name.toLowerCase()));
     let unique = name;
@@ -185,6 +190,16 @@ export class LocalRoomHost {
 
   private start(peerId: string): void {
     if (this.phase !== 'lobby' || peerId !== this.hostId || this.players.filter(player => player.connected).length < 2) return;
+    if (this.resumePhase) {
+      this.phase = this.resumePhase;
+      this.resumePhase = undefined;
+      for (const player of this.players) {
+        if (player.connected) this.deliver(player.id, { t: 'hand', tiles: player.hand, replace: true });
+      }
+      this.broadcast({ t: 'toast', text: 'GAME RESUMED! Pick up where you left off.', tone: 'good' });
+      this.broadcastRoom();
+      return;
+    }
     this.deal(false);
   }
 
@@ -305,7 +320,7 @@ export class LocalRoomHost {
       eliminated: player.eliminated || undefined,
     }));
     return {
-      phase: this.phase, hostId: this.hostId, players, bunch: this.bag.length, peel: this.peel,
+      phase: this.phase, resumeAvailable: !!this.resumePhase, hostId: this.hostId, players, bunch: this.bag.length, peel: this.peel,
       dictionary: this.dictionary, winnerId: this.winnerId, claimantId: this.claimantId,
       reviewBoard: this.reviewBoard, reviewEndsAt: this.reviewEndsAt,
     };

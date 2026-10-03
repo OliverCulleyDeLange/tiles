@@ -981,7 +981,16 @@ export function createTiles(root: HTMLElement): void {
     const connectedPlayers = next.players.filter(player => player.connected !== false).length;
     start.hidden = myId !== next.hostId;
     start.disabled = connectedPlayers < 2;
-    start.textContent = connectedPlayers < 2 ? 'Waiting for an opponent…' : `Start with ${connectedPlayers} players`;
+    start.textContent = connectedPlayers < 2
+      ? 'Waiting for an opponent…'
+      : next.resumeAvailable ? `Resume with ${connectedPlayers} players` : `Start with ${connectedPlayers} players`;
+    if (connectionMode === 'nearby-host' && next.resumeAvailable) {
+      lobbyHelp.textContent = myId === next.hostId
+        ? 'Returning players will wait here. Resume the saved game when everyone is ready.'
+        : 'Waiting for the game creator to resume the saved game.';
+    } else if (connectionMode === 'nearby-join' && next.resumeAvailable) {
+      lobbyHelp.textContent = 'Waiting for the game creator to resume the saved game.';
+    }
     dictionarySelect.value = dictionary;
     dictionarySelect.disabled = myId !== next.hostId || next.phase !== 'lobby';
     newGame.disabled = myId !== next.hostId || next.players.length < 2;

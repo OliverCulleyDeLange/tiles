@@ -70,6 +70,7 @@ export function tileInsideArea(tile: Pick<PlacedTile, 'x' | 'y'>, area: PlayerAr
 
 export interface RoomSnapshot {
   phase: 'lobby' | 'playing' | 'review' | 'finished';
+  resumeAvailable?: boolean;
   hostId: string;
   players: PlayerSummary[];
   bunch: number;
