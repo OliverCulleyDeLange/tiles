@@ -245,6 +245,18 @@
   .roster li { display: flex; align-items: center; gap: .7rem; padding: .8rem; background: #fff; border: 2px solid var(--tr-ink); border-radius: 10px; }
   .roster li.is-loading { color: #6b6044; }
   .roster li.is-loading::before { content: ''; width: 1rem; height: 1rem; flex: 0 0 auto; border: 2px solid #b4aa88; border-top-color: var(--tr-ink); border-radius: 50%; animation: button-spin .7s linear infinite; }
+  .roster-player { min-width: 0; flex: 1 1 9rem; display: grid; gap: .16rem; }
+  .roster-player strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .transport-detail { color: #6b6044; font-size: .68rem; font-weight: 700; line-height: 1.25; }
+  .transport-detail.searching,
+  .transport-detail.requesting,
+  .transport-detail.requested,
+  .transport-detail.authenticating,
+  .transport-detail.transport,
+  .transport-detail.syncing { color: #765b00; }
+  .transport-detail.synced { color: #19734b; }
+  .transport-detail.disconnected,
+  .transport-detail.failed { color: #a43124; }
   .roster em { margin-left: auto; font-size: .75rem; font-style: normal; text-transform: uppercase; }
   .reinvite-player { flex: 0 0 auto; min-height: 2rem; padding: .35rem .6rem; border: 1.5px solid var(--tr-ink); border-radius: 7px; background: var(--tr-yellow); color: var(--tr-ink); box-shadow: 1px 1px 0 var(--tr-ink); font: 800 .72rem/1 inherit; cursor: pointer; }
   .reinvite-player:disabled { background: #ded8bd; opacity: .7; box-shadow: none; cursor: default; }

@@ -2,7 +2,7 @@ import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor
 
 export interface NearbyEndpoint { endpointId: string; name: string }
 export interface NearbyVerification extends NearbyEndpoint { code: string }
-export interface NearbyPayload { endpointId: string; payload: string }
+export interface NearbyPayload extends NearbyEndpoint { payload: string }
 
 interface NearbyConnectionsPlugin {
   isAvailable(): Promise<{ available: boolean; permissionAliases?: string[] }>;
