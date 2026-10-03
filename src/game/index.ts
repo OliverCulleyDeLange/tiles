@@ -730,18 +730,18 @@ export function createTiles(root: HTMLElement): void {
       await wait(350);
     }
 
-    // Cross-platform BLE is more reliable when one phone is serving its
-    // advertisement while the other fetches it, rather than both immediately
-    // competing as GATT clients and servers. The second role is added shortly
-    // afterwards so same-platform discovery still works.
-    const android = Capacitor.getPlatform() === 'android';
-    if (android) await NearbyConnections.startDiscovery({ name });
-    else await NearbyConnections.startAdvertising({ name });
+    // Give each device an independent initial role so two nearby phones do not
+    // repeatedly compete as GATT clients and servers in lockstep. Every device
+    // follows the same protocol, regardless of its platform, and a refresh
+    // chooses again if the first pairing did not produce an endpoint.
+    const advertiseFirst = crypto.getRandomValues(new Uint8Array(1))[0] % 2 === 0;
+    if (advertiseFirst) await NearbyConnections.startAdvertising({ name });
+    else await NearbyConnections.startDiscovery({ name });
     if (!isCurrent()) return;
     await wait(5_500);
     if (!isCurrent()) return;
-    if (android) await NearbyConnections.startAdvertising({ name });
-    else await NearbyConnections.startDiscovery({ name });
+    if (advertiseFirst) await NearbyConnections.startDiscovery({ name });
+    else await NearbyConnections.startAdvertising({ name });
     if (isCurrent()) scheduleNearbyHomeRefresh();
   }
 
