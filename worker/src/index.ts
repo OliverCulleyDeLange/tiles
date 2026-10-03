@@ -365,6 +365,13 @@ export class TilesRoom extends DurableObject<Env> {
     const game = await this.load();
     const player = game.players.find(value => value.id === session.id);
     if (!player) return;
+    if (game.phase === 'lobby') {
+      game.players = game.players.filter(value => value.id !== session.id);
+      if (game.hostId === session.id) game.hostId = game.players[0]?.id ?? '';
+      await this.save(game);
+      this.broadcastRoom(game);
+      return;
+    }
     player.connected = false;
     await this.save(game);
     this.broadcastRoom(game);

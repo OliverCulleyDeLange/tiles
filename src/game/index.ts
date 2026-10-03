@@ -24,6 +24,7 @@ import { Capacitor } from '@capacitor/core';
 const PRODUCTION_SERVER = import.meta.env.PUBLIC_REALTIME_SERVER
   || 'https://tiles-realtime.oliverdelange.workers.dev';
 const DICTIONARY_BASE = `${import.meta.env.BASE_URL.replace(/\/?$/, '/')}dictionaries`;
+const ANDROID_NATIVE = Capacitor.getPlatform() === 'android';
 const TILE = 48;
 const MIN_SCALE = 0.35;
 const MAX_SCALE = 2.5;
@@ -44,14 +45,15 @@ interface SavedGame {
 const SAVED_GAMES_KEY = 'tiles-saved-games-v1';
 const MAX_SAVED_GAMES = 8;
 
+const dictionaryFile = (name: string) => `${DICTIONARY_BASE}/${name}.txt${ANDROID_NATIVE ? '' : '.gz'}`;
 const DICTIONARY_FILES: Record<DictionaryId, string> = {
-  'scowl-us': `${DICTIONARY_BASE}/scowl-us-60.txt.gz`,
-  'scowl-gb': `${DICTIONARY_BASE}/scowl-gb-60.txt.gz`,
-  de: `${DICTIONARY_BASE}/de.txt.gz`,
-  es: `${DICTIONARY_BASE}/es.txt.gz`,
-  it: `${DICTIONARY_BASE}/it.txt.gz`,
-  fr: `${DICTIONARY_BASE}/fr.txt.gz`,
-  pt: `${DICTIONARY_BASE}/pt.txt.gz`,
+  'scowl-us': dictionaryFile('scowl-us-60'),
+  'scowl-gb': dictionaryFile('scowl-gb-60'),
+  de: dictionaryFile('de'),
+  es: dictionaryFile('es'),
+  it: dictionaryFile('it'),
+  fr: dictionaryFile('fr'),
+  pt: dictionaryFile('pt'),
 };
 
 export function createTiles(root: HTMLElement): void {
@@ -67,6 +69,7 @@ export function createTiles(root: HTMLElement): void {
   const roster = root.querySelector<HTMLElement>('[data-roster]')!;
   const dictionarySelect = root.querySelector<HTMLSelectElement>('[data-dictionary]')!;
   const roomLabels = root.querySelectorAll<HTMLElement>('[data-room-label]');
+  const lobbyBack = root.querySelector<HTMLButtonElement>('[data-lobby-back]')!;
   const start = root.querySelector<HTMLButtonElement>('[data-start]')!;
   const onlineInvite = root.querySelector<HTMLElement>('[data-online-invite]')!;
   const roomQr = root.querySelector<HTMLCanvasElement>('[data-room-qr]')!;
@@ -282,7 +285,8 @@ export function createTiles(root: HTMLElement): void {
       const response = await fetch(DICTIONARY_FILES[dictionary]);
       if (!response.ok) throw new Error(`Dictionary request failed: ${response.status}`);
       const bytes = new Uint8Array(await response.arrayBuffer());
-      const words = new TextDecoder().decode(gunzipSync(bytes))
+      const contents = bytes[0] === 0x1f && bytes[1] === 0x8b ? gunzipSync(bytes) : bytes;
+      const words = new TextDecoder().decode(contents)
         .split(/\s+/).filter(Boolean).map(word => word.toUpperCase());
       if (loadingDictionary !== dictionary) return;
       dictionaryWords = new Set(words);
@@ -1090,7 +1094,13 @@ export function createTiles(root: HTMLElement): void {
   });
   nearbyHostButton.addEventListener('click', () => { void hostNearby(); });
   nearbyJoinButton.addEventListener('click', () => { void joinNearby(); });
-  nearbyClose.addEventListener('click', () => nearbyDialog.close());
+  nearbyClose.addEventListener('click', async () => {
+    nearbyDialog.close();
+    if (connectionMode !== 'nearby-join' || state) return;
+    connectionMode = null;
+    nearbyEndpointMap.clear();
+    await NearbyConnections.stop().catch(() => undefined);
+  });
   dictionarySelect.addEventListener('change', () => {
     const dictionary = dictionarySelect.value as DictionaryId;
     if (isDictionaryId(dictionary)) send({ t: 'dictionary', dictionary });
@@ -1242,15 +1252,22 @@ export function createTiles(root: HTMLElement): void {
     send({ t: 'new-game' });
     gameMenu.close();
   });
-  goHome.addEventListener('click', async () => {
+  async function leaveToHome(forgetLobby: boolean): Promise<void> {
+    const leavingRoom = roomName;
     connectionMode = null;
     onlineReconnectEnabled = false;
     if (reconnectTimer != null) window.clearTimeout(reconnectTimer);
     socket?.close();
     transportSend = null;
     if (isNativeNearby()) await NearbyConnections.stop().catch(() => undefined);
+    if (forgetLobby && leavingRoom) {
+      localStorage.removeItem(`tiles-session:${leavingRoom}`);
+      writeSavedGames(readSavedGames().filter(record => record.room !== leavingRoom));
+    }
     location.assign(import.meta.env.BASE_URL);
-  });
+  }
+  lobbyBack.addEventListener('click', () => { void leaveToHome(true); });
+  goHome.addEventListener('click', () => { void leaveToHome(false); });
   retryConnection.addEventListener('click', async () => {
     retryConnection.disabled = true;
     if (connectionMode === 'online' && onlineName) {

@@ -44,7 +44,10 @@
           <p class="eyebrow">Room <span data-room-label></span></p>
           <h1>Waiting for the bunch</h1>
         </div>
-        <span class="live-pill">Live</span>
+        <div class="lobby-nav">
+          <button type="button" data-lobby-back>← Back</button>
+          <span class="live-pill">Live</span>
+        </div>
       </header>
       <ol class="roster" data-roster></ol>
       <label class="dictionary-picker">
@@ -188,6 +191,8 @@
   .lobby-card header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
   .lobby-card header > div { min-width: 0; }
   .lobby-card h1 { font-size: clamp(2.3rem, 7vw, 4rem); }
+  .lobby-nav { flex: 0 0 auto; display: flex; align-items: center; gap: .45rem; }
+  .lobby-nav button { min-height: 2.2rem; padding: .35rem .6rem; border: 2px solid var(--tr-ink); border-radius: 999px; background: #fff; color: var(--tr-ink); font: 800 .78rem/1 inherit; cursor: pointer; }
   .live-pill { flex: 0 0 auto; border: 2px solid var(--tr-ink); background: #c8ffcf; border-radius: 999px; padding: .35rem .7rem; font-weight: 800; }
   .roster { list-style: none; padding: 0; margin: 2rem 0; display: grid; gap: .55rem; }
   .roster li { display: flex; align-items: center; gap: .7rem; padding: .8rem; background: #fff; border: 2px solid var(--tr-ink); border-radius: 10px; }
@@ -297,6 +302,7 @@
     .name-row { grid-template-columns: 1fr; }
     .name-row input, .dictionary-picker select { width: 100%; font-size: 16px; }
     .lobby-card header { align-items: flex-start; }
+    .lobby-nav { flex-direction: column-reverse; align-items: flex-end; }
     .lobby-card h1 { max-width: 100%; font-size: clamp(2rem, 10vw, 3rem); overflow-wrap: anywhere; }
     .roster { margin: 1.25rem 0; }
     .dictionary-picker { grid-template-columns: 1fr; gap: .35rem; }
