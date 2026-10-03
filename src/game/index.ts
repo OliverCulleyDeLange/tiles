@@ -156,6 +156,7 @@ export function createTiles(root: HTMLElement): void {
   let nearbyPermissionAliases: string[] | undefined;
   const selectedNearbyIds = new Set<string>();
   const outgoingNearbyInvites = new Set<string>();
+  const pendingReinviteNames = new Set<string>();
   const nearbyInviteStates = new Map<string, { name: string; status: 'requested' | 'received' | 'accepted' }>();
   let nearbyHomeStarting = false;
   let pendingNearbyInvite: NearbyVerification | null = null;
@@ -740,7 +741,15 @@ export function createTiles(root: HTMLElement): void {
 
   function endpointForPlayer(name: string): NearbyEndpoint | undefined {
     const normalized = name.trim().toLocaleLowerCase();
-    return [...nearbyEndpointMap.values()].find(endpoint => endpoint.name.trim().toLocaleLowerCase() === normalized);
+    const endpoints = [...nearbyEndpointMap.values()];
+    const exact = endpoints.find(endpoint => endpoint.name.trim().toLocaleLowerCase() === normalized);
+    if (exact) return exact;
+    const unsuffixed = normalized.replace(/\s+\d+$/, '');
+    const available = endpoints.filter(endpoint => !outgoingNearbyInvites.has(endpoint.endpointId));
+    const loose = available.filter(endpoint => endpoint.name.trim().toLocaleLowerCase() === unsuffixed);
+    if (loose.length === 1) return loose[0];
+    const disconnected = state?.players.filter(player => player.connected === false && player.id !== state?.hostId) ?? [];
+    return disconnected.length === 1 && available.length === 1 ? available[0] : undefined;
   }
 
   function inviteButton(player: PlayerSummary): string {
@@ -748,8 +757,9 @@ export function createTiles(root: HTMLElement): void {
     const endpoint = endpointForPlayer(player.name);
     const invite = endpoint ? nearbyInviteStates.get(endpoint.endpointId) : undefined;
     const pending = endpoint ? outgoingNearbyInvites.has(endpoint.endpointId) : false;
-    const label = invite?.status === 'received' ? 'Received' : pending ? 'Inviting…' : 'Invite';
-    return `<button type="button" class="reinvite-player" data-reinvite-endpoint="${escapeHtml(endpoint?.endpointId ?? '')}" ${!endpoint || pending ? 'disabled' : ''}>${label}</button>`;
+    const searching = pendingReinviteNames.has(player.name.trim().toLocaleLowerCase());
+    const label = invite?.status === 'received' ? 'Received' : pending ? 'Inviting…' : searching ? 'Finding…' : 'Invite';
+    return `<button type="button" class="reinvite-player" data-reinvite-player="${escapeHtml(player.name)}" ${pending || searching ? 'disabled' : ''}>${label}</button>`;
   }
 
   function renderPlayerDisconnect(room: RoomSnapshot): void {
@@ -763,35 +773,75 @@ export function createTiles(root: HTMLElement): void {
     if (connectionMode !== 'nearby-host') return;
     for (const player of disconnected) {
       const endpoint = endpointForPlayer(player.name);
+      const searching = pendingReinviteNames.has(player.name.trim().toLocaleLowerCase());
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'reinvite-player';
-      button.dataset.reinviteEndpoint = endpoint?.endpointId ?? '';
-      button.disabled = !endpoint || outgoingNearbyInvites.has(endpoint.endpointId);
-      button.textContent = endpoint && outgoingNearbyInvites.has(endpoint.endpointId) ? 'Inviting…' : `Invite ${player.name}`;
+      button.dataset.reinvitePlayer = player.name;
+      button.disabled = searching || !!endpoint && outgoingNearbyInvites.has(endpoint.endpointId);
+      button.textContent = searching ? `Finding ${player.name}…`
+        : endpoint && outgoingNearbyInvites.has(endpoint.endpointId) ? 'Inviting…' : `Invite ${player.name}`;
       playerDisconnect.append(button);
     }
   }
 
-  async function reinviteNearbyPlayer(endpointId: string): Promise<void> {
-    const endpoint = nearbyEndpointMap.get(endpointId);
-    if (!endpoint || outgoingNearbyInvites.has(endpointId)) return;
-    outgoingNearbyInvites.add(endpointId);
-    nearbyInviteStates.set(endpointId, { name: endpoint.name, status: 'requested' });
+  async function sendNearbyReinvite(endpoint: NearbyEndpoint, playerName: string): Promise<void> {
+    if (outgoingNearbyInvites.has(endpoint.endpointId)) return;
+    pendingReinviteNames.delete(playerName.trim().toLocaleLowerCase());
+    outgoingNearbyInvites.add(endpoint.endpointId);
+    nearbyInviteStates.set(endpoint.endpointId, { name: playerName, status: 'requested' });
     if (state) {
       renderLobbyRoster(state);
       renderPlayerDisconnect(state);
     }
     try {
-      await NearbyConnections.requestConnection({ endpointId, name: nearbyName });
+      await NearbyConnections.requestConnection({ endpointId: endpoint.endpointId, name: nearbyName });
     } catch {
-      outgoingNearbyInvites.delete(endpointId);
-      nearbyInviteStates.delete(endpointId);
+      outgoingNearbyInvites.delete(endpoint.endpointId);
+      nearbyInviteStates.delete(endpoint.endpointId);
       if (state) {
         renderLobbyRoster(state);
         renderPlayerDisconnect(state);
       }
       show(`${endpoint.name} could not be invited.`, 'bad');
+    }
+  }
+
+  async function reinviteNearbyPlayer(playerName: string): Promise<void> {
+    const normalized = playerName.trim().toLocaleLowerCase();
+    if (!normalized || pendingReinviteNames.has(normalized)) return;
+    const endpoint = endpointForPlayer(playerName);
+    if (endpoint) {
+      await sendNearbyReinvite(endpoint, playerName);
+      return;
+    }
+    pendingReinviteNames.add(normalized);
+    if (state) {
+      renderLobbyRoster(state);
+      renderPlayerDisconnect(state);
+    }
+    try {
+      await NearbyConnections.startDiscovery({ name: nearbyName });
+    } catch {
+      pendingReinviteNames.delete(normalized);
+      if (state) {
+        renderLobbyRoster(state);
+        renderPlayerDisconnect(state);
+      }
+      show(`Could not search for ${playerName}.`, 'bad');
+    }
+  }
+
+  function dispatchPendingReinvites(): void {
+    for (const normalized of [...pendingReinviteNames]) {
+      const player = state?.players.find(candidate => candidate.connected === false
+        && candidate.name.trim().toLocaleLowerCase() === normalized);
+      if (!player) {
+        pendingReinviteNames.delete(normalized);
+        continue;
+      }
+      const endpoint = endpointForPlayer(player.name);
+      if (endpoint) void sendNearbyReinvite(endpoint, player.name);
     }
   }
 
@@ -932,6 +982,7 @@ export function createTiles(root: HTMLElement): void {
       nearbyEndpointMap.set(endpoint.endpointId, endpoint);
       if (connectionMode === 'nearby-home' && isNew) selectedNearbyIds.add(endpoint.endpointId);
       renderNearbyEndpoints();
+      dispatchPendingReinvites();
       if (state && connectionMode === 'nearby-host') {
         renderLobbyRoster(state);
         renderPlayerDisconnect(state);
@@ -1067,6 +1118,7 @@ export function createTiles(root: HTMLElement): void {
         nearbyEndpointMap.clear();
         selectedNearbyIds.clear();
         outgoingNearbyInvites.clear();
+        pendingReinviteNames.clear();
         nearbyInviteStates.clear();
         await NearbyConnections.startDiscovery({ name });
       }
@@ -1146,6 +1198,9 @@ export function createTiles(root: HTMLElement): void {
     }
     state = next;
     state.dictionary = dictionary;
+    for (const player of next.players) {
+      if (player.connected !== false) pendingReinviteNames.delete(player.name.trim().toLocaleLowerCase());
+    }
     rememberGame(next);
     bunch.textContent = String(next.bunch);
     peel.textContent = String(next.peel);
@@ -1979,8 +2034,8 @@ export function createTiles(root: HTMLElement): void {
   });
   nearbyStartButton.addEventListener('click', () => { void startSelectedLocalGame(); });
   const handleReinviteClick = (event: Event): void => {
-    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-reinvite-endpoint]');
-    if (button?.dataset.reinviteEndpoint) void reinviteNearbyPlayer(button.dataset.reinviteEndpoint);
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-reinvite-player]');
+    if (button?.dataset.reinvitePlayer) void reinviteNearbyPlayer(button.dataset.reinvitePlayer);
   };
   roster.addEventListener('click', handleReinviteClick);
   playerDisconnect.addEventListener('click', handleReinviteClick);
@@ -2211,6 +2266,7 @@ export function createTiles(root: HTMLElement): void {
     localHost = null;
     nearbyInviteStates.clear();
     outgoingNearbyInvites.clear();
+    pendingReinviteNames.clear();
     nearbyHostId = null;
     nearbyHostName = '';
     nearbyAutoReconnect = false;

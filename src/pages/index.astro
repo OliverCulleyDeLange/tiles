@@ -338,8 +338,8 @@
   .letter-tile.is-selected { outline-color: var(--tr-coral); }
   .letter-tile.is-dragging { cursor: grabbing; transform: rotate(4deg) scale(1.04); }
   .tile-drag-overlay { z-index: 200; }
-  .rack-wrap { display: grid; grid-template-columns: minmax(0, 1fr); gap: .55rem; align-items: center; min-height: 76px; padding: .42rem max(.6rem, env(safe-area-inset-right)) max(.42rem, env(safe-area-inset-bottom)) max(.6rem, env(safe-area-inset-left)); border-top: 2px solid var(--tr-ink); background: #2c2921; color: white; }
-  .rack { width: 100%; min-height: 48px; display: flex; flex-wrap: wrap; align-content: center; gap: .28rem; }
+  .rack-wrap { display: grid; grid-template-columns: minmax(0, 1fr); gap: .55rem; align-items: center; min-height: 76px; max-height: min(34dvh, 245px); overflow: hidden; padding: .42rem max(.6rem, env(safe-area-inset-right)) max(.42rem, env(safe-area-inset-bottom)) max(.6rem, env(safe-area-inset-left)); border-top: 2px solid var(--tr-ink); background: #2c2921; color: white; }
+  .rack { width: 100%; min-height: 48px; max-height: min(24dvh, 192px); display: flex; flex-wrap: wrap; align-content: flex-start; gap: .28rem; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
   .rack-slot { flex: 0 0 48px; width: 48px; height: 48px; }
   .rack-slot:empty { border: 1px dashed rgba(255,255,255,.16); border-radius: 6px; }
   .rack-slot > .letter-tile { display: grid; }
@@ -400,10 +400,12 @@
     .top-players { justify-content: flex-start; }
     .rack-wrap { grid-template-columns: minmax(0, 1fr); gap: .35rem; }
     .rack { justify-content: flex-start; }
+    .rack-slot { flex-basis: clamp(36px, 10vw, 40px); width: clamp(36px, 10vw, 40px); height: clamp(36px, 10vw, 40px); }
     .letter-tile { width: clamp(36px, 10vw, 40px); height: clamp(36px, 10vw, 40px); border-radius: 5px; box-shadow: 2px 2px 0 #8b7c54; font-size: 1.05rem; }
     .board-controls button { width: 2.5rem; height: 2.5rem; }
-    .rack-actions { width: 100%; max-width: none; }
-    .dump-button, .menu-button { width: 64px; max-width: 64px; }
+    .rack-actions { width: 100%; max-width: none; gap: .25rem; }
+    .rack-actions > button { min-width: 0; flex: 1 1 0; padding-inline: .25rem; }
+    .dump-button, .menu-button { width: auto; max-width: none; }
     .dump-button small { display: none; }
     .game-menu-dialog, .invite-dialog { width: calc(100vw - 1rem); max-height: calc(100dvh - 1rem); padding: 1rem; border-radius: 14px; box-shadow: 4px 4px 0 var(--tr-ink); }
     .update-notice { justify-content: space-between; width: calc(100vw - 1.25rem); }
@@ -414,6 +416,8 @@
     .game-bar { min-height: 42px; padding-top: max(.2rem, env(safe-area-inset-top)); padding-bottom: .2rem; }
     .player-chip { min-height: 25px; }
     .rack-wrap { min-height: 58px; padding-top: .25rem; }
+    .rack { max-height: 68px; }
+    .rack-slot { flex-basis: 30px; width: 30px; height: 30px; }
     .letter-tile { width: 30px; height: 30px; font-size: .95rem; }
   }
 </style>
