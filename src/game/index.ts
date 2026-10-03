@@ -745,10 +745,15 @@ export function createTiles(root: HTMLElement): void {
     const isCurrent = (): boolean => generation === nearbyHomeGeneration && connectionMode === 'nearby-home';
     if (!isCurrent()) return;
     if (refresh) {
+      // Keep the advertised endpoint stable. Restarting advertising can leave
+      // another phone holding an endpoint ID whose GATT server no longer exists.
       await NearbyConnections.stopDiscovery().catch(() => undefined);
-      await NearbyConnections.stopAdvertising().catch(() => undefined);
       if (!isCurrent()) return;
       await wait(350);
+      if (!isCurrent()) return;
+      await NearbyConnections.startDiscovery({ name });
+      if (isCurrent()) scheduleNearbyHomeRefresh();
+      return;
     }
 
     // Give each device an independent initial role so two nearby phones do not
@@ -1015,6 +1020,13 @@ export function createTiles(root: HTMLElement): void {
     return name.trim().toLocaleLowerCase();
   }
 
+  function nearbyErrorDetail(error: unknown): string {
+    const raw = error instanceof Error ? error.message
+      : typeof error === 'object' && error && 'message' in error ? String(error.message)
+      : '';
+    return raw.replace(/\s+/g, ' ').trim().slice(0, 120) || 'native connection failed';
+  }
+
   function setNearbyPeerState(name: string, phase: NearbyPeerPhase, detail: string): void {
     const key = nearbyPeerKey(name);
     if (!key) return;
@@ -1131,16 +1143,19 @@ export function createTiles(root: HTMLElement): void {
       renderPlayerDisconnect(state);
     }
     try {
+      await NearbyConnections.stopDiscovery().catch(() => undefined);
+      await NearbyConnections.stopAdvertising().catch(() => undefined);
       await NearbyConnections.requestConnection({ endpointId: endpoint.endpointId, name: nearbyName });
       setNearbyPeerState(playerName, 'requested', 'Request queued · waiting for secure handshake');
-    } catch {
+    } catch (error) {
       outgoingNearbyInvites.delete(endpoint.endpointId);
       nearbyInviteStates.delete(endpoint.endpointId);
       if (state) {
         renderLobbyRoster(state);
         renderPlayerDisconnect(state);
       }
-      setNearbyPeerState(playerName, 'failed', 'Connection request failed · ready to retry');
+      setNearbyPeerState(playerName, 'failed', `Connection request failed · ${nearbyErrorDetail(error)}`);
+      if (outgoingNearbyInvites.size === 0) scheduleNearbyTransport(0);
       show(`${endpoint.name} could not be invited.`, 'bad');
     }
   }
@@ -1243,6 +1258,7 @@ export function createTiles(root: HTMLElement): void {
         nearbyConnectingId = invitation.endpointId;
         nearbyAutoReconnect = true;
         showNearbyLobbyLoading(invitation.name);
+        await NearbyConnections.stopDiscovery().catch(() => undefined);
       }
       await NearbyConnections.acceptVerification({ endpointId: invitation.endpointId, accept });
       nearbyStatus.textContent = accept ? `Joining ${invitation.name}'s game…` : `Declined ${invitation.name}'s game.`;
@@ -1339,10 +1355,13 @@ export function createTiles(root: HTMLElement): void {
         nearbyConnectingId = endpoint.endpointId;
         setNearbyPeerState(endpoint.name, 'requesting', 'Endpoint found · requesting Nearby reconnection');
         nearbyStatus.textContent = `Reconnecting to ${endpoint.name}…`;
-        void NearbyConnections.requestConnection({ endpointId: endpoint.endpointId, name: nearbyName })
+        void Promise.all([
+          NearbyConnections.stopDiscovery().catch(() => undefined),
+          NearbyConnections.stopAdvertising().catch(() => undefined),
+        ]).then(() => NearbyConnections.requestConnection({ endpointId: endpoint.endpointId, name: nearbyName }))
           .then(() => setNearbyPeerState(endpoint.name, 'requested', 'Reconnect queued · waiting for secure handshake'))
-          .catch(() => {
-            setNearbyPeerState(endpoint.name, 'failed', 'Reconnect request failed · retrying discovery');
+          .catch(error => {
+            setNearbyPeerState(endpoint.name, 'failed', `Reconnect failed · ${nearbyErrorDetail(error)}`);
             nearbyConnectingId = null;
             scheduleNearbyTransport();
           });
@@ -1396,7 +1415,10 @@ export function createTiles(root: HTMLElement): void {
           renderLobbyRoster(state);
           renderPlayerDisconnect(state);
         }
-        if (state?.phase !== 'lobby' || outgoingNearbyInvites.size === 0) void NearbyConnections.stopDiscovery();
+        if (outgoingNearbyInvites.size === 0) {
+          void NearbyConnections.stopDiscovery();
+          void NearbyConnections.startAdvertising({ name: nearbyName });
+        }
         nearbyReconnectAttempt = 0;
         nearbyStatus.textContent = `${endpoint.name} connected.`;
         return;
@@ -1434,7 +1456,7 @@ export function createTiles(root: HTMLElement): void {
             renderPlayerDisconnect(state);
           }
           show(`${endpoint.name} could not be invited.`, 'bad');
-          scheduleNearbyTransport(0);
+          if (outgoingNearbyInvites.size === 0) scheduleNearbyTransport(0);
           return;
         }
         localHost.disconnect(endpoint.endpointId);
@@ -1456,6 +1478,10 @@ export function createTiles(root: HTMLElement): void {
   }
 
   async function startNearbyHost(name: string, restored?: StoredLocalRoom, inviteIds: string[] = []): Promise<void> {
+    const invitedEndpointNames = new Map(inviteIds.map(endpointId => [
+      endpointId,
+      nearbyEndpointMap.get(endpointId)?.name ?? 'Nearby player',
+    ]));
     try {
       await requestNearbyPermissions();
       clearNearbyHomeRefreshTimer();
@@ -1469,7 +1495,14 @@ export function createTiles(root: HTMLElement): void {
       connectionRestored();
       stopOnlineTransport();
       await NearbyConnections.setKeepAwake({ enabled: true });
-      await NearbyConnections.startAdvertising({ name });
+      if (inviteIds.length) {
+        // The selected endpoints are already known. Stop local scanning and
+        // advertising so the radio can concentrate on outgoing handshakes.
+        await NearbyConnections.stopDiscovery().catch(() => undefined);
+        await NearbyConnections.stopAdvertising().catch(() => undefined);
+      } else {
+        await NearbyConnections.startAdvertising({ name });
+      }
       if (restored) {
         // Endpoint IDs are ephemeral. A saved player must be freshly discovered
         // before we offer an invitation for the restored game.
@@ -1496,7 +1529,7 @@ export function createTiles(root: HTMLElement): void {
       outgoingNearbyInvites.clear();
       nearbyInviteStates.clear();
       for (const endpointId of inviteIds) {
-        const endpointName = nearbyEndpointMap.get(endpointId)?.name ?? 'Nearby player';
+        const endpointName = invitedEndpointNames.get(endpointId) ?? 'Nearby player';
         outgoingNearbyInvites.add(endpointId);
         nearbyInviteStates.set(endpointId, {
           name: endpointName,
@@ -1507,13 +1540,14 @@ export function createTiles(root: HTMLElement): void {
       const resumeToken = restored ? localStorage.getItem(sessionKey()) ?? undefined : undefined;
       localHost.receive(localPeerId, { t: 'hello', v: PROTOCOL_VERSION, name, resumeToken });
       for (const endpointId of inviteIds) {
-        const endpointName = nearbyEndpointMap.get(endpointId)?.name ?? 'Nearby player';
+        const endpointName = invitedEndpointNames.get(endpointId) ?? 'Nearby player';
         void NearbyConnections.requestConnection({ endpointId, name })
           .then(() => setNearbyPeerState(endpointName, 'requested', 'Request queued · waiting for secure handshake'))
-          .catch(() => {
+          .catch(error => {
             nearbyInviteStates.delete(endpointId);
             outgoingNearbyInvites.delete(endpointId);
-            setNearbyPeerState(endpointName, 'failed', 'Connection request failed · ready to retry');
+            setNearbyPeerState(endpointName, 'failed', `Connection request failed · ${nearbyErrorDetail(error)}`);
+            if (outgoingNearbyInvites.size === 0) scheduleNearbyTransport(0);
             if (state) renderLobbyRoster(state);
             show('One nearby player could not be invited.', 'bad');
           });
