@@ -193,6 +193,7 @@ export function createTiles(root: HTMLElement): void {
   let viewingPlayerId: string | null = null;
   const undoStack: EditSnapshot[] = [];
   const redoStack: EditSnapshot[] = [];
+  const unreadChatMessages = new Map<string, string>();
   let toastTimer: number | null = null;
 
   function readSavedGames(): SavedGame[] {
@@ -355,6 +356,32 @@ export function createTiles(root: HTMLElement): void {
     else if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
   }
 
+  function chatIsReadable(): boolean {
+    return document.visibilityState === 'visible' && state?.phase === 'lobby' && !lobby.hidden;
+  }
+
+  function updateChatReceipt(messageId: string, status: 'sent' | 'received' | 'read'): void {
+    const receipt = Array.from(chatLog.querySelectorAll<HTMLElement>('[data-chat-receipt]'))
+      .find(candidate => candidate.dataset.chatReceipt === messageId);
+    if (!receipt) return;
+    const rank = { sent: 0, received: 1, read: 2 } as const;
+    const current = receipt.dataset.status as keyof typeof rank | undefined;
+    if (current && rank[current] >= rank[status]) return;
+    receipt.dataset.status = status;
+    receipt.textContent = status[0].toUpperCase() + status.slice(1);
+  }
+
+  function sendChatRead(messageId: string, senderId: string): void {
+    if (!chatIsReadable() || !unreadChatMessages.has(messageId)) return;
+    unreadChatMessages.delete(messageId);
+    send({ t: 'chat-receipt', messageId, senderId, status: 'read' });
+  }
+
+  function flushChatReadReceipts(): void {
+    if (!chatIsReadable()) return;
+    for (const [messageId, senderId] of unreadChatMessages) sendChatRead(messageId, senderId);
+  }
+
   function connectionRestored(): void {
     root.dataset.connection = 'online';
     connectionNotice.hidden = true;
@@ -450,10 +477,14 @@ export function createTiles(root: HTMLElement): void {
       if (message.toast) show(message.toast.text, message.toast.tone);
     }
     else if (message.t === 'chat') {
+      const messageId = message.id || crypto.randomUUID();
+      if (Array.from(chatLog.querySelectorAll<HTMLElement>('[data-message-id]'))
+        .some(candidate => candidate.dataset.messageId === messageId)) return;
       const empty = chatLog.querySelector('[data-chat-empty]');
       empty?.remove();
       const row = document.createElement('div');
       row.className = `chat-message${message.playerId === myId ? ' is-you' : ''}`;
+      row.dataset.messageId = messageId;
       const author = document.createElement('strong');
       author.textContent = message.playerId === myId ? 'You' : message.name;
       const text = document.createElement('span');
@@ -462,11 +493,25 @@ export function createTiles(root: HTMLElement): void {
       time.dateTime = new Date(message.at).toISOString();
       time.textContent = new Date(message.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       row.append(author, text, time);
+      if (message.playerId === myId) {
+        const receipt = document.createElement('small');
+        receipt.className = 'chat-receipt';
+        receipt.dataset.chatReceipt = messageId;
+        receipt.dataset.status = 'sent';
+        receipt.textContent = 'Sent';
+        row.append(receipt);
+      }
       chatLog.append(row);
       while (chatLog.children.length > 60) chatLog.firstElementChild?.remove();
       chatLog.scrollTop = chatLog.scrollHeight;
       if (message.playerId === myId) setButtonLoading(chatSend, false);
+      else {
+        unreadChatMessages.set(messageId, message.playerId);
+        send({ t: 'chat-receipt', messageId, senderId: message.playerId, status: 'received' });
+        window.setTimeout(() => sendChatRead(messageId, message.playerId), 250);
+      }
     }
+    else if (message.t === 'chat-receipt') updateChatReceipt(message.messageId, message.status);
     else if (message.t === 'new-game') {
       resetGameState();
       renderTiles();
@@ -1127,6 +1172,7 @@ export function createTiles(root: HTMLElement): void {
     lobbyTitle.textContent = 'Waiting for the bunch';
     lobby.hidden = next.phase !== 'lobby';
     game.hidden = next.phase === 'lobby';
+    flushChatReadReceipts();
     chatInput.disabled = next.phase !== 'lobby';
     if (chatSend.getAttribute('aria-busy') !== 'true') chatSend.disabled = next.phase !== 'lobby';
     setButtonLoading(enterLobby, false);
@@ -1966,7 +2012,7 @@ export function createTiles(root: HTMLElement): void {
     if (!text || state?.phase !== 'lobby') return;
     setButtonLoading(chatSend, true, 'Sending…');
     chatInput.value = '';
-    send({ t: 'chat', text });
+    send({ t: 'chat', id: crypto.randomUUID(), text });
     window.setTimeout(() => setButtonLoading(chatSend, false), 3_000);
   });
   copyLink.addEventListener('click', async () => {
@@ -2206,6 +2252,7 @@ export function createTiles(root: HTMLElement): void {
   }, 25_000);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
+    flushChatReadReceipts();
     if (connectionMode === 'nearby-home') {
       void startNearbyHome();
     } else if (connectionMode === 'nearby-host' || (connectionMode === 'nearby-join' && !nearbyHostId)) {

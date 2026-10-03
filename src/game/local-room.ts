@@ -3,6 +3,7 @@ import {
   createPlayerAreas,
   isDictionaryId,
   sanitizeBoard,
+  sanitizeChatId,
   sanitizeChatText,
   sanitizeLayout,
   sanitizeName,
@@ -92,7 +93,8 @@ export class LocalRoomHost {
     const player = this.players.find(value => value.id === peerId);
     if (!player) return;
     if (message.t === 'dictionary') this.setDictionary(peerId, message.dictionary);
-    else if (message.t === 'chat') this.chat(player, message.text);
+    else if (message.t === 'chat') this.chat(player, message.id, message.text);
+    else if (message.t === 'chat-receipt') this.chatReceipt(player, message);
     else if (message.t === 'start') this.start(peerId);
     else if (message.t === 'new-game') this.newGame(peerId);
     else if (message.t === 'layout') this.layout(player, message.board);
@@ -181,11 +183,24 @@ export class LocalRoomHost {
     this.broadcastRoom();
   }
 
-  private chat(player: LocalPlayer, raw: string): void {
+  private chat(player: LocalPlayer, rawId: string, raw: string): void {
     if (this.phase !== 'lobby') return;
+    const id = sanitizeChatId(rawId) || crypto.randomUUID();
     const text = sanitizeChatText(raw);
     if (!text) return;
-    this.broadcast({ t: 'chat', playerId: player.id, name: player.name, text, at: Date.now() });
+    this.broadcast({ t: 'chat', id, playerId: player.id, name: player.name, text, at: Date.now() });
+  }
+
+  private chatReceipt(
+    player: LocalPlayer,
+    message: Extract<ClientMessage, { t: 'chat-receipt' }>,
+  ): void {
+    if (this.phase !== 'lobby' || player.id === message.senderId || !sanitizeChatId(message.messageId)) return;
+    if (message.status !== 'received' && message.status !== 'read') return;
+    if (!this.players.some(candidate => candidate.id === message.senderId)) return;
+    this.deliver(message.senderId, {
+      t: 'chat-receipt', messageId: message.messageId, playerId: player.id, status: message.status,
+    });
   }
 
   private start(peerId: string): void {
