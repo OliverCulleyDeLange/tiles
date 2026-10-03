@@ -932,8 +932,26 @@ export function createTiles(root: HTMLElement): void {
   function reorderRack(tileId: string, clientX: number, clientY: number): void {
     const tile = tiles.find(value => value.id === tileId);
     if (!tile) return;
+    const sourceIndex = tiles.findIndex(value => value.id === tileId);
+    const slots = [...rack.querySelectorAll<HTMLElement>('[data-rack-id]')];
+    const targetSlot = slots.reduce<HTMLElement | null>((closest, candidate) => {
+      const rect = candidate.getBoundingClientRect();
+      if (pointInRect(clientX, clientY, rect)) return candidate;
+      if (!closest) return candidate;
+      const closestRect = closest.getBoundingClientRect();
+      const distance = Math.hypot(clientX - (rect.left + rect.width / 2), clientY - (rect.top + rect.height / 2));
+      const closestDistance = Math.hypot(clientX - (closestRect.left + closestRect.width / 2), clientY - (closestRect.top + closestRect.height / 2));
+      return distance < closestDistance ? candidate : closest;
+    }, null);
+    const targetIndex = tiles.findIndex(value => value.id === targetSlot?.dataset.rackId);
+    const targetTile = tiles[targetIndex];
+    if (targetTile && targetTile.id !== tileId && targetTile.x != null && targetTile.y != null) {
+      [tiles[sourceIndex], tiles[targetIndex]] = [tiles[targetIndex], tiles[sourceIndex]];
+      return;
+    }
+
     const remaining = tiles.filter(value => value.id !== tileId);
-    const elements = [...rack.querySelectorAll<HTMLElement>('[data-rack-id]')]
+    const elements = slots
       .filter(element => element.dataset.rackId !== tileId);
     let insertion = remaining.length;
     if (elements.length) {
