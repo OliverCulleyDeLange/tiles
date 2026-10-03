@@ -79,6 +79,10 @@ export function createTiles(root: HTMLElement): void {
   const share = root.querySelector<HTMLButtonElement>('[data-share]')!;
   const lobbyHelp = root.querySelector<HTMLElement>('.lobby-help')!;
   const lobbyTitle = root.querySelector<HTMLElement>('[data-lobby-title]')!;
+  const chatLog = root.querySelector<HTMLElement>('[data-chat-log]')!;
+  const chatForm = root.querySelector<HTMLFormElement>('[data-chat-form]')!;
+  const chatInput = root.querySelector<HTMLInputElement>('[data-chat-input]')!;
+  const chatSend = root.querySelector<HTMLButtonElement>('[data-chat-send]')!;
   const board = root.querySelector<HTMLElement>('[data-board]')!;
   const boardLayer = root.querySelector<HTMLElement>('[data-board-layer]')!;
   const boardLabel = root.querySelector<HTMLElement>('[data-board-label]')!;
@@ -93,9 +97,8 @@ export function createTiles(root: HTMLElement): void {
   const bunch = root.querySelector<HTMLElement>('[data-bunch]')!;
   const peel = root.querySelector<HTMLElement>('[data-peel]')!;
   const players = root.querySelector<HTMLElement>('[data-players]')!;
-  const rotateLeft = root.querySelector<HTMLButtonElement>('[data-rotate-left]')!;
-  const rotateRight = root.querySelector<HTMLButtonElement>('[data-rotate-right]')!;
   const resetView = root.querySelector<HTMLButtonElement>('[data-reset-view]')!;
+  const fillDirection = root.querySelector<HTMLButtonElement>('[data-fill-direction]')!;
   const toast = root.querySelector<HTMLElement>('[data-toast]')!;
   const nearbyEntry = root.querySelector<HTMLElement>('[data-nearby-entry]')!;
   const nearbyStartButton = root.querySelector<HTMLButtonElement>('[data-nearby-start]')!;
@@ -175,6 +178,8 @@ export function createTiles(root: HTMLElement): void {
   const pointers = new Map<number, Point>();
   let gesture: Gesture | null = null;
   let nativeGesture: { camera: Camera; x: number; y: number } | null = null;
+  let autoFillDirection: 'right' | 'down' = 'right';
+  let viewingPlayerId: string | null = null;
   let toastTimer: number | null = null;
 
   function readSavedGames(): SavedGame[] {
@@ -386,11 +391,30 @@ export function createTiles(root: HTMLElement): void {
   function handleServerMessage(message: ServerMessage): void {
     if (message.t === 'welcome') {
       myId = message.id;
+      viewingPlayerId ??= myId;
       if (message.resumeToken) localStorage.setItem(sessionKey(), message.resumeToken);
       connectionRestored();
       reconnectAttempt = 0;
       updateRoom(message.room);
     } else if (message.t === 'room') updateRoom(message.room);
+    else if (message.t === 'chat') {
+      const empty = chatLog.querySelector('[data-chat-empty]');
+      empty?.remove();
+      const row = document.createElement('div');
+      row.className = `chat-message${message.playerId === myId ? ' is-you' : ''}`;
+      const author = document.createElement('strong');
+      author.textContent = message.playerId === myId ? 'You' : message.name;
+      const text = document.createElement('span');
+      text.textContent = message.text;
+      const time = document.createElement('time');
+      time.dateTime = new Date(message.at).toISOString();
+      time.textContent = new Date(message.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      row.append(author, text, time);
+      chatLog.append(row);
+      while (chatLog.children.length > 60) chatLog.firstElementChild?.remove();
+      chatLog.scrollTop = chatLog.scrollHeight;
+      if (message.playerId === myId) setButtonLoading(chatSend, false);
+    }
     else if (message.t === 'new-game') {
       setButtonLoading(newGame, false);
       cancelDrag();
@@ -434,6 +458,7 @@ export function createTiles(root: HTMLElement): void {
       setButtonLoading(start, false);
       setButtonLoading(newGame, false);
       setButtonLoading(nearbyStartButton, false);
+      setButtonLoading(chatSend, false);
     }
   }
 
@@ -554,6 +579,8 @@ export function createTiles(root: HTMLElement): void {
     onlineInvite.hidden = true;
     dictionarySelect.disabled = true;
     start.hidden = true;
+    chatInput.disabled = true;
+    chatSend.disabled = true;
     lobbyHelp.textContent = 'Keep this screen open while the nearby lobby connects.';
   }
 
@@ -934,7 +961,7 @@ export function createTiles(root: HTMLElement): void {
     peel.textContent = String(next.peel);
     renderLobbyRoster(next);
     players.innerHTML = next.players.map((player, index) =>
-      `<li><span class="player-chip ${player.id === myId ? 'is-you' : ''} ${player.eliminated ? 'is-out' : ''} ${player.connected === false ? 'is-offline' : ''}" style="--owner-color:${ownerColor(index)}"><i></i><span>${escapeHtml(player.name)}</span><b>${player.connected === false ? 'OFFLINE' : player.eliminated ? 'OUT' : `${player.tilesLeft} loose`}</b></span></li>`
+      `<li><button type="button" data-view-player="${escapeHtml(player.id)}" class="player-chip ${player.id === myId ? 'is-you' : ''} ${viewingPlayerId === player.id ? 'is-viewing' : ''} ${player.eliminated ? 'is-out' : ''} ${player.connected === false ? 'is-offline' : ''}" style="--owner-color:${ownerColor(index)}"><i></i><span>${escapeHtml(player.name)}</span><b>${player.connected === false ? 'OFFLINE' : player.eliminated ? 'OUT' : `${player.tilesLeft} loose`}</b></button></li>`
     ).join('');
     const connectedPlayers = next.players.filter(player => player.connected !== false).length;
     start.hidden = myId !== next.hostId;
@@ -950,6 +977,8 @@ export function createTiles(root: HTMLElement): void {
     lobbyTitle.textContent = 'Waiting for the bunch';
     lobby.hidden = next.phase !== 'lobby';
     game.hidden = next.phase === 'lobby';
+    chatInput.disabled = next.phase !== 'lobby';
+    if (chatSend.getAttribute('aria-busy') !== 'true') chatSend.disabled = next.phase !== 'lobby';
     setButtonLoading(enterLobby, false);
     setButtonLoading(nearbyStartButton, false);
     if (next.phase !== 'lobby') setButtonLoading(start, false);
@@ -983,6 +1012,7 @@ export function createTiles(root: HTMLElement): void {
   function renderTiles(): void {
     boardLayer.querySelectorAll('.letter-tile').forEach(node => node.remove());
     boardLayer.querySelectorAll('.player-area').forEach(node => node.remove());
+    boardLayer.querySelectorAll('.autofill-arrow').forEach(node => node.remove());
     rack.innerHTML = '';
     boardLabel.textContent = `Shared table · ${Math.round(camera.scale * 100)}% · drag, pinch and twist`;
 
@@ -1003,6 +1033,20 @@ export function createTiles(root: HTMLElement): void {
         positionTile(element, position.x, position.y);
         boardLayer.append(element);
       }
+    }
+
+    const selected = selectedId ? tiles.find(tile => tile.id === selectedId && tile.x != null && tile.y != null) : undefined;
+    if (selected?.x != null && selected.y != null && canEditTiles()) {
+      const [dx, dy] = autoFillVector();
+      const myIndex = state?.players.findIndex(player => player.id === myId) ?? -1;
+      const areaRotation = areaFor(state?.players[myIndex], myIndex, state?.players.length ?? 0)?.rotation ?? 0;
+      const arrow = document.createElement('span');
+      arrow.className = 'autofill-arrow';
+      arrow.textContent = autoFillDirection === 'right' ? '→' : '↓';
+      arrow.style.left = `calc(50% + ${(selected.x + dx * .82) * TILE}px)`;
+      arrow.style.top = `calc(50% + ${(selected.y + dy * .82) * TILE}px)`;
+      arrow.style.transform = `rotate(${areaRotation}rad)`;
+      boardLayer.append(arrow);
     }
 
     const myIndex = state?.players.findIndex(player => player.id === myId) ?? 0;
@@ -1182,8 +1226,13 @@ export function createTiles(root: HTMLElement): void {
       const outOfBounds = destinations.some(destination => Math.abs(destination.x) > 100 || Math.abs(destination.y) > 100);
       if (outOfBounds) {
         show('That is beyond the edge of the table.', 'bad');
+      } else if (occupied && moving.length === 1 && insertTileAt(tile, x, y, movingSet)) {
+        selectedIds.clear();
+        selectedIds.add(tile.id);
+        selectedId = tile.id;
+        layoutChanged = true;
       } else if (occupied) {
-        show(`${occupied.ownerName}'s tile is already there.`, 'bad');
+        show(occupied.ownerId === myId ? 'That row cannot be shifted further.' : `${occupied.ownerName}'s tile is already there.`, 'bad');
       } else {
         for (const destination of destinations) {
           destination.value.x = destination.x;
@@ -1227,24 +1276,23 @@ export function createTiles(root: HTMLElement): void {
     sendOwnLayout();
   }
 
-  function addTappedTile(tile: LocalTile, anchorId: string): void {
+  function autoFillVector(): readonly [number, number] {
     const myIndex = state?.players.findIndex(player => player.id === myId) ?? 0;
     const area = areaFor(state?.players[myIndex], myIndex, state?.players.length ?? 1);
+    const rotation = area?.rotation ?? 0;
+    const rightX = Math.round(Math.cos(rotation));
+    const rightY = Math.round(Math.sin(rotation));
+    return autoFillDirection === 'right' ? [rightX, rightY] : [-rightY, rightX];
+  }
+
+  function addTappedTile(tile: LocalTile, anchorId: string): void {
     const anchor = tiles.find(value => value.id === anchorId && value.x != null && value.y != null);
     if (!anchor || anchor.x == null || anchor.y == null) return;
 
     const placed = boardPayload();
     const at = new Map(placed.map(value => [`${value.x},${value.y}`, value]));
-    const rotation = area?.rotation ?? 0;
-    const rightX = Math.round(Math.cos(rotation));
-    const rightY = Math.round(Math.sin(rotation));
-    const downX = -rightY;
-    const downY = rightX;
-    const verticalRun = axisRun(anchor.x, anchor.y, downX, downY, at);
-    const followDown = verticalRun.length >= 2;
-    const stepX = followDown ? downX : rightX;
-    const stepY = followDown ? downY : rightY;
-    const run = followDown ? verticalRun : axisRun(anchor.x, anchor.y, rightX, rightY, at);
+    const [stepX, stepY] = autoFillVector();
+    const run = axisRun(anchor.x, anchor.y, stepX, stepY, at);
     const end = run.at(-1);
     const targetX = (end?.x ?? anchor.x) + stepX;
     const targetY = (end?.y ?? anchor.y) + stepY;
@@ -1260,6 +1308,33 @@ export function createTiles(root: HTMLElement): void {
     selectedIds.add(tile.id);
     selectedId = tile.id;
     sendOwnLayout();
+  }
+
+  function insertTileAt(tile: LocalTile, x: number, y: number, movingSet: Set<string>): boolean {
+    const [stepX, stepY] = autoFillVector();
+    const occupied = new Map(allPlaced()
+      .filter(value => !movingSet.has(value.tile.id))
+      .map(value => [`${value.tile.x},${value.tile.y}`, value]));
+    const chain: LocalTile[] = [];
+    let cursorX = x;
+    let cursorY = y;
+    while (occupied.has(`${cursorX},${cursorY}`)) {
+      const occupant = occupied.get(`${cursorX},${cursorY}`)!;
+      if (occupant.ownerId !== myId) return false;
+      const ownTile = tiles.find(value => value.id === occupant.tile.id);
+      if (!ownTile) return false;
+      chain.push(ownTile);
+      cursorX += stepX;
+      cursorY += stepY;
+      if (Math.abs(cursorX) > 100 || Math.abs(cursorY) > 100) return false;
+    }
+    for (const shifted of chain.reverse()) {
+      shifted.x = (shifted.x ?? 0) + stepX;
+      shifted.y = (shifted.y ?? 0) + stepY;
+    }
+    tile.x = x;
+    tile.y = y;
+    return true;
   }
 
   function axisRun(
@@ -1493,22 +1568,58 @@ export function createTiles(root: HTMLElement): void {
     applyCamera();
   }
 
-  function rotateToPlayerView(direction: -1 | 1): void {
-    if (!state?.players.length) return;
-    const turn = Math.PI * 2;
-    const normalized = ((camera.rotation % turn) + turn) % turn;
-    const views = [...new Set(state.players.map((player, index) => {
-      const area = areaFor(player, index, state!.players.length);
-      return (((-(area?.rotation ?? 0)) % turn) + turn) % turn;
-    }))];
-    const deltas = views.map(view => direction > 0
-      ? (view - normalized + turn) % turn
-      : -((normalized - view + turn) % turn)
-    ).filter(delta => Math.abs(delta) > 0.001);
-    if (!deltas.length) return;
-    const delta = direction > 0 ? Math.min(...deltas) : Math.max(...deltas);
+  function focusPlayer(playerId: string): void {
+    if (!state) return;
+    const playerIndex = state.players.findIndex(player => player.id === playerId);
+    if (playerIndex < 0) return;
+    const player = state.players[playerIndex];
+    const area = areaFor(player, playerIndex, state.players.length);
+    const rotation = -(area?.rotation ?? 0);
+    const placed = player.id === myId ? boardPayload() : player.board;
+    const validTileIds = new Set(findWords(placed, area?.rotation ?? 0)
+      .filter(word => dictionaryWords.has(word.text))
+      .flatMap(word => word.tileIds));
+    const validTiles = placed.filter(tile => validTileIds.has(tile.id));
+    const framing = validTiles.length ? validTiles : placed;
     const rect = board.getBoundingClientRect();
-    transformAt(camera.scale, camera.rotation + delta, rect.left + rect.width / 2, rect.top + rect.height / 2);
+
+    if (!framing.length) {
+      const cosine = Math.cos(rotation);
+      const sine = Math.sin(rotation);
+      const centerX = (area?.x ?? 0) * TILE;
+      const centerY = (area?.y ?? 0) * TILE;
+      const scale = clamp(Math.min(rect.width / (PLAYER_AREA_WIDTH * TILE), rect.height / (PLAYER_AREA_HEIGHT * TILE)) * .88, MIN_SCALE, 1);
+      camera = {
+        rotation,
+        scale,
+        x: -(centerX * cosine - centerY * sine) * scale,
+        y: -(centerX * sine + centerY * cosine) * scale,
+      };
+    } else {
+      const cosine = Math.cos(rotation);
+      const sine = Math.sin(rotation);
+      const points = framing.map(tile => {
+        const x = tile.x * TILE;
+        const y = tile.y * TILE;
+        return { x: x * cosine - y * sine, y: x * sine + y * cosine };
+      });
+      const minX = Math.min(...points.map(point => point.x)) - TILE * .7;
+      const maxX = Math.max(...points.map(point => point.x)) + TILE * .7;
+      const minY = Math.min(...points.map(point => point.y)) - TILE * .7;
+      const maxY = Math.max(...points.map(point => point.y)) + TILE * .7;
+      const scale = clamp(Math.min((rect.width - 48) / (maxX - minX), (rect.height - 48) / (maxY - minY)), MIN_SCALE, 1.8);
+      camera = {
+        rotation,
+        scale,
+        x: -((minX + maxX) / 2) * scale,
+        y: -((minY + maxY) / 2) * scale,
+      };
+    }
+    viewingPlayerId = playerId;
+    players.querySelectorAll<HTMLElement>('[data-view-player]').forEach(chip => {
+      chip.classList.toggle('is-viewing', chip.dataset.viewPlayer === playerId);
+    });
+    applyCamera();
   }
 
   function gestureFromPointers(): { center: Point; distance: number; angle: number } | null {
@@ -1627,6 +1738,15 @@ export function createTiles(root: HTMLElement): void {
   start.addEventListener('click', () => {
     setButtonLoading(start, true, 'Starting…');
     send({ t: 'start' });
+  });
+  chatForm.addEventListener('submit', event => {
+    event.preventDefault();
+    const text = chatInput.value.replace(/\s+/g, ' ').trim();
+    if (!text || state?.phase !== 'lobby') return;
+    setButtonLoading(chatSend, true, 'Sending…');
+    chatInput.value = '';
+    send({ t: 'chat', text });
+    window.setTimeout(() => setButtonLoading(chatSend, false), 3_000);
   });
   copyLink.addEventListener('click', async () => {
     setButtonLoading(copyLink, true, 'Copying…');
@@ -1768,17 +1888,19 @@ export function createTiles(root: HTMLElement): void {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') resetAllGestures();
   });
-  rotateLeft.addEventListener('click', () => {
-    rotateToPlayerView(-1);
+  players.addEventListener('click', event => {
+    const chip = (event.target as HTMLElement).closest<HTMLElement>('[data-view-player]');
+    if (chip?.dataset.viewPlayer) focusPlayer(chip.dataset.viewPlayer);
   });
-  rotateRight.addEventListener('click', () => {
-    rotateToPlayerView(1);
+  fillDirection.addEventListener('click', () => {
+    autoFillDirection = autoFillDirection === 'right' ? 'down' : 'right';
+    const arrow = autoFillDirection === 'right' ? '→' : '↓';
+    fillDirection.textContent = `Fill ${arrow}`;
+    fillDirection.setAttribute('aria-label', `Autofill ${autoFillDirection}`);
+    renderTiles();
   });
   resetView.addEventListener('click', () => {
-    const myIndex = state?.players.findIndex(player => player.id === myId) ?? -1;
-    const area = areaFor(state?.players[myIndex], myIndex, state?.players.length ?? 1);
-    camera = { x: 0, y: 0, scale: camera.scale, rotation: -(area?.rotation ?? 0) };
-    applyCamera();
+    focusPlayer(myId);
   });
 
   dump.addEventListener('click', () => {

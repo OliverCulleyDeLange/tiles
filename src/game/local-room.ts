@@ -3,6 +3,7 @@ import {
   createPlayerAreas,
   isDictionaryId,
   sanitizeBoard,
+  sanitizeChatText,
   sanitizeLayout,
   sanitizeName,
   type ClientMessage,
@@ -88,6 +89,7 @@ export class LocalRoomHost {
     const player = this.players.find(value => value.id === peerId);
     if (!player) return;
     if (message.t === 'dictionary') this.setDictionary(peerId, message.dictionary);
+    else if (message.t === 'chat') this.chat(player, message.text);
     else if (message.t === 'start') this.start(peerId);
     else if (message.t === 'new-game') this.newGame(peerId);
     else if (message.t === 'layout') this.layout(player, message.board);
@@ -95,7 +97,7 @@ export class LocalRoomHost {
     else if (message.t === 'dump') this.dump(player, message.tileId);
     else if (message.t === 'review') this.review(player, message.rotten);
     else if (message.t === 'ping') this.deliver(peerId, { t: 'pong' });
-    if (message.t !== 'ping') this.changed();
+    if (message.t !== 'ping' && message.t !== 'chat') this.changed();
   }
 
   disconnect(peerId: string): void {
@@ -172,6 +174,13 @@ export class LocalRoomHost {
     if (!isDictionaryId(dictionary)) return;
     this.dictionary = dictionary;
     this.broadcastRoom();
+  }
+
+  private chat(player: LocalPlayer, raw: string): void {
+    if (this.phase !== 'lobby') return;
+    const text = sanitizeChatText(raw);
+    if (!text) return;
+    this.broadcast({ t: 'chat', playerId: player.id, name: player.name, text, at: Date.now() });
   }
 
   private start(peerId: string): void {

@@ -83,6 +83,7 @@ export interface RoomSnapshot {
 
 export type ClientMessage =
   | { t: 'hello'; v: number; name: string; resumeToken?: string }
+  | { t: 'chat'; text: string }
   | { t: 'dictionary'; dictionary: DictionaryId }
   | { t: 'start' }
   | { t: 'new-game' }
@@ -98,6 +99,7 @@ export type ServerMessage =
   | { t: 'layout'; playerId: string; board: PlacedTile[] }
   | { t: 'new-game' }
   | { t: 'hand'; tiles: Tile[]; replace: boolean }
+  | { t: 'chat'; playerId: string; name: string; text: string; at: number }
   | { t: 'toast'; text: string; tone?: 'good' | 'bad' | 'plain' }
   | { t: 'error'; message: string }
   | { t: 'pong' };
@@ -108,6 +110,11 @@ export function sanitizeName(raw: unknown): string {
   if (typeof raw !== 'string') return '';
   return Array.from(raw.replace(INVISIBLE, '').replace(/\s+/g, ' ').trim())
     .slice(0, MAX_NAME_LENGTH).join('');
+}
+
+export function sanitizeChatText(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  return Array.from(raw.replace(INVISIBLE, '').replace(/\s+/g, ' ').trim()).slice(0, 240).join('');
 }
 
 export function sanitizeRoom(raw: unknown): string {

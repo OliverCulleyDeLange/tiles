@@ -6,6 +6,7 @@ import {
   isDictionaryId,
   PROTOCOL_VERSION,
   sanitizeBoard,
+  sanitizeChatText,
   sanitizeLayout,
   sanitizeName,
   sanitizeRoom,
@@ -117,6 +118,7 @@ export class TilesRoom extends DurableObject<Env> {
     if (message.t === 'hello') await this.hello(ws, session, message);
     else if (!session.joined) return;
     else if (message.t === 'dictionary') await this.setDictionary(session, message.dictionary);
+    else if (message.t === 'chat') await this.chat(session, message.text);
     else if (message.t === 'start') await this.start(session);
     else if (message.t === 'new-game') await this.newGame(session);
     else if (message.t === 'layout') await this.layout(session, message.board);
@@ -195,6 +197,15 @@ export class TilesRoom extends DurableObject<Env> {
     const game = await this.load();
     if (game.phase !== 'lobby' || session.id !== game.hostId || game.players.length < 2) return;
     await this.deal(game, false);
+  }
+
+  private async chat(session: Session, raw: string): Promise<void> {
+    const game = await this.load();
+    if (game.phase !== 'lobby') return;
+    const player = game.players.find(value => value.id === session.id);
+    const text = sanitizeChatText(raw);
+    if (!player || !text) return;
+    this.broadcast({ t: 'chat', playerId: player.id, name: player.name, text, at: Date.now() });
   }
 
   private async newGame(session: Session): Promise<void> {
