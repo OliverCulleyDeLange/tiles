@@ -768,6 +768,9 @@ export function createTiles(root: HTMLElement): void {
       finishDrag(interaction);
       if (tile && interaction.wasPlaced) toggleSelection(tile.id);
       else if (tile && !boardPayload().length) placeFirstTile(tile);
+      else if (tile && selectedId && tiles.some(value => value.id === selectedId && value.x != null && value.y != null)) {
+        addTappedTile(tile, selectedId);
+      }
       else if (tile) {
         selectedIds.clear();
         selectedIds.add(tile.id);
@@ -830,12 +833,72 @@ export function createTiles(root: HTMLElement): void {
   function placeFirstTile(tile: LocalTile): void {
     const myIndex = state?.players.findIndex(player => player.id === myId) ?? 0;
     const area = areaFor(state?.players[myIndex], myIndex, state?.players.length ?? 1);
-    tile.x = Math.round(area?.x ?? 0);
-    tile.y = Math.round(area?.y ?? 0);
+    const rotation = area?.rotation ?? 0;
+    const left = -(PLAYER_AREA_WIDTH / 2 - 0.5);
+    const top = -(PLAYER_AREA_HEIGHT / 2 - 0.5);
+    tile.x = Math.round((area?.x ?? 0) + left * Math.cos(rotation) - top * Math.sin(rotation));
+    tile.y = Math.round((area?.y ?? 0) + left * Math.sin(rotation) + top * Math.cos(rotation));
     selectedIds.clear();
     selectedIds.add(tile.id);
     selectedId = tile.id;
     sendOwnLayout();
+  }
+
+  function addTappedTile(tile: LocalTile, anchorId: string): void {
+    const myIndex = state?.players.findIndex(player => player.id === myId) ?? 0;
+    const area = areaFor(state?.players[myIndex], myIndex, state?.players.length ?? 1);
+    const anchor = tiles.find(value => value.id === anchorId && value.x != null && value.y != null);
+    if (!anchor || anchor.x == null || anchor.y == null) return;
+
+    const placed = boardPayload();
+    const at = new Map(placed.map(value => [`${value.x},${value.y}`, value]));
+    const rotation = area?.rotation ?? 0;
+    const rightX = Math.round(Math.cos(rotation));
+    const rightY = Math.round(Math.sin(rotation));
+    const downX = -rightY;
+    const downY = rightX;
+    const verticalRun = axisRun(anchor.x, anchor.y, downX, downY, at);
+    const followDown = verticalRun.length >= 2;
+    const stepX = followDown ? downX : rightX;
+    const stepY = followDown ? downY : rightY;
+    const run = followDown ? verticalRun : axisRun(anchor.x, anchor.y, rightX, rightY, at);
+    const end = run.at(-1);
+    const targetX = (end?.x ?? anchor.x) + stepX;
+    const targetY = (end?.y ?? anchor.y) + stepY;
+    const occupied = allPlaced().find(value => value.tile.x === targetX && value.tile.y === targetY);
+    if (occupied) {
+      show(`${occupied.ownerName}'s tile is already there.`, 'bad');
+      return;
+    }
+
+    tile.x = targetX;
+    tile.y = targetY;
+    selectedIds.clear();
+    selectedIds.add(tile.id);
+    selectedId = tile.id;
+    sendOwnLayout();
+  }
+
+  function axisRun(
+    startX: number,
+    startY: number,
+    dx: number,
+    dy: number,
+    at: Map<string, PlacedTile>,
+  ): PlacedTile[] {
+    const values: PlacedTile[] = [];
+    let x = startX;
+    let y = startY;
+    while (at.has(`${x - dx},${y - dy}`)) {
+      x -= dx;
+      y -= dy;
+    }
+    while (at.has(`${x},${y}`)) {
+      values.push(at.get(`${x},${y}`)!);
+      x += dx;
+      y += dy;
+    }
+    return values;
   }
 
   function sendOwnLayout(): void {
