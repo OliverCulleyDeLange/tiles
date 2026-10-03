@@ -394,7 +394,7 @@ export class TilesRoom extends DurableObject<Env> {
       players,
       bunch: game.bag.length,
       peel: game.peel,
-      dictionary: game.dictionary ?? 'scowl-us',
+      dictionary: game.dictionary ?? 'scowl-gb',
       winnerId: game.winnerId,
       claimantId: game.claimantId,
       reviewBoard: game.reviewBoard,
@@ -404,7 +404,7 @@ export class TilesRoom extends DurableObject<Env> {
 
   private async load(): Promise<GameState> {
     return (await this.ctx.storage.get<GameState>('game')) ?? {
-      phase: 'lobby', hostId: '', players: [], bag: [], peel: 0, dictionary: 'scowl-us',
+      phase: 'lobby', hostId: '', players: [], bag: [], peel: 0, dictionary: 'scowl-gb',
     };
   }
 

@@ -331,11 +331,24 @@ export function createTiles(root: HTMLElement): void {
       if (message.replace) {
         const previous = new Map(tiles.map(tile => [tile.id, tile]));
         const restored = new Map((state?.players.find(player => player.id === myId)?.board ?? []).map(tile => [tile.id, tile]));
-        tiles = message.tiles.map(tile => {
+        const incoming = new Map(message.tiles.map(tile => [tile.id, tile]));
+        const slots: Array<LocalTile | null> = tiles.map(existing => {
+          const tile = incoming.get(existing.id);
+          if (!tile) return null;
+          incoming.delete(existing.id);
           const placed = previous.get(tile.id) ?? restored.get(tile.id);
           return { ...tile, x: placed?.x ?? null, y: placed?.y ?? null };
         });
-      } else tiles.push(...message.tiles.map(tile => ({ ...tile, x: null, y: null })));
+        const additions = [...incoming.values()].map(tile => {
+          const placed = restored.get(tile.id);
+          return { ...tile, x: placed?.x ?? null, y: placed?.y ?? null } as LocalTile;
+        });
+        if (!slots.length) tiles = additions;
+        else tiles = fillRackSpaces(slots, additions);
+      } else {
+        const slots: Array<LocalTile | null> = [...tiles];
+        tiles = fillRackSpaces(slots, message.tiles.map(tile => ({ ...tile, x: null, y: null })));
+      }
       if (!dragging) {
         selectedId = null;
         selectedIds.clear();
@@ -548,7 +561,7 @@ export function createTiles(root: HTMLElement): void {
   function updateRoom(next: RoomSnapshot): void {
     if (dragging && next.phase !== 'playing') cancelDrag();
     const previousPhase = state?.phase;
-    const dictionary = next.dictionary ?? 'scowl-us';
+    const dictionary = next.dictionary ?? 'scowl-gb';
     state = next;
     state.dictionary = dictionary;
     rememberGame(next);
@@ -835,7 +848,7 @@ export function createTiles(root: HTMLElement): void {
     const area = areaFor(state?.players[myIndex], myIndex, state?.players.length ?? 1);
     const rotation = area?.rotation ?? 0;
     const left = -(PLAYER_AREA_WIDTH / 2 - 0.5);
-    const top = -(PLAYER_AREA_HEIGHT / 2 - 0.5);
+    const top = -(PLAYER_AREA_HEIGHT / 2 - 0.5) + 1;
     tile.x = Math.round((area?.x ?? 0) + left * Math.cos(rotation) - top * Math.sin(rotation));
     tile.y = Math.round((area?.y ?? 0) + left * Math.sin(rotation) + top * Math.cos(rotation));
     selectedIds.clear();
@@ -909,6 +922,21 @@ export function createTiles(root: HTMLElement): void {
       player.tilesLeft = player.tiles.length - board.length;
     }
     send({ t: 'layout', board });
+  }
+
+  function fillRackSpaces(slots: Array<LocalTile | null>, additions: LocalTile[]): LocalTile[] {
+    const displaced: LocalTile[] = [];
+    for (const tile of additions) {
+      const index = slots.findIndex(value => value == null || (value.x != null && value.y != null));
+      if (index < 0) {
+        slots.push(tile);
+        continue;
+      }
+      const occupant = slots[index];
+      if (occupant) displaced.push(occupant);
+      slots[index] = tile;
+    }
+    return [...slots.filter((tile): tile is LocalTile => tile != null), ...displaced];
   }
 
   function cancelDrag(): void {
@@ -1140,6 +1168,23 @@ export function createTiles(root: HTMLElement): void {
     };
   }
 
+  function resetPointerGesture(): void {
+    for (const pointerId of pointers.keys()) {
+      try {
+        if (board.hasPointerCapture(pointerId)) board.releasePointerCapture(pointerId);
+      } catch {}
+    }
+    pointers.clear();
+    gesture = null;
+    board.classList.remove('is-panning');
+  }
+
+  function resetAllGestures(): void {
+    cancelDrag();
+    resetPointerGesture();
+    nativeGesture = null;
+  }
+
   nameForm.addEventListener('submit', event => {
     event.preventDefault();
     const name = sanitizeName(nameInput.value);
@@ -1206,7 +1251,10 @@ export function createTiles(root: HTMLElement): void {
   board.addEventListener('pointerdown', event => {
     if ((event.target as HTMLElement).closest('.letter-tile, [data-board-controls]')) return;
     if (pointers.has(event.pointerId)) return;
-    if (!pointers.size) clearSelection();
+    if (!pointers.size) {
+      nativeGesture = null;
+      clearSelection();
+    }
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     board.setPointerCapture(event.pointerId);
     board.classList.add('is-panning');
@@ -1257,6 +1305,7 @@ export function createTiles(root: HTMLElement): void {
     applyCamera();
   });
   const endGesture = (event: PointerEvent) => {
+    if (!pointers.has(event.pointerId)) return;
     pointers.delete(event.pointerId);
     if (!pointers.size) {
       gesture = null;
@@ -1269,8 +1318,8 @@ export function createTiles(root: HTMLElement): void {
       center: point, distance: 0, angle: 0, camera: { ...camera },
     };
   };
-  board.addEventListener('pointerup', endGesture);
-  board.addEventListener('pointercancel', endGesture);
+  window.addEventListener('pointerup', endGesture, { capture: true });
+  window.addEventListener('pointercancel', endGesture, { capture: true });
   board.addEventListener('wheel', event => {
     event.preventDefault();
     if (event.altKey || event.shiftKey) {
@@ -1287,6 +1336,7 @@ export function createTiles(root: HTMLElement): void {
     const event = raw as Event & { clientX?: number; clientY?: number };
     event.preventDefault();
     cancelDrag();
+    resetPointerGesture();
     const rect = board.getBoundingClientRect();
     nativeGesture = {
       camera: { ...camera },
@@ -1305,10 +1355,16 @@ export function createTiles(root: HTMLElement): void {
       nativeGesture.y,
     );
   }, { passive: false });
-  board.addEventListener('gestureend', () => { nativeGesture = null; });
-  board.addEventListener('dblclick', () => {
-    camera = { x: 0, y: 0, scale: 1, rotation: 0 };
-    applyCamera();
+  const endNativeGesture = () => {
+    nativeGesture = null;
+    resetPointerGesture();
+  };
+  board.addEventListener('gestureend', endNativeGesture);
+  board.addEventListener('gesturecancel', endNativeGesture);
+  window.addEventListener('blur', resetAllGestures);
+  window.addEventListener('pagehide', resetAllGestures);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') resetAllGestures();
   });
   rotateLeft.addEventListener('click', () => {
     rotateToPlayerView(-1);

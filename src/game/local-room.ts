@@ -37,7 +37,7 @@ export class LocalRoomHost {
   private players: LocalPlayer[] = [];
   private bag: Tile[] = [];
   private peel = 0;
-  private dictionary: DictionaryId = 'scowl-us';
+  private dictionary: DictionaryId = 'scowl-gb';
   private winnerId?: string;
   private claimantId?: string;
   private reviewBoard?: PlacedTile[];
