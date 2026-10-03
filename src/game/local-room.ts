@@ -101,14 +101,7 @@ export class LocalRoomHost {
   disconnect(peerId: string): void {
     const index = this.players.findIndex(value => value.id === peerId);
     if (index < 0) return;
-    if (this.phase !== 'lobby') {
-      this.players[index].connected = false;
-      this.broadcastRoom();
-      this.changed();
-      return;
-    }
-    this.players.splice(index, 1);
-    if (this.hostId === peerId) this.hostId = this.players[0]?.id ?? '';
+    this.players[index].connected = false;
     this.broadcastRoom();
     this.changed();
   }
@@ -136,10 +129,19 @@ export class LocalRoomHost {
   }
 
   private join(peerId: string, rawName: string, resumeToken?: string): void {
-    if (this.players.some(player => player.id === peerId)) return;
-    const resuming = resumeToken
+    const existingPeer = this.players.find(player => player.id === peerId);
+    if (existingPeer) {
+      existingPeer.connected = true;
+      this.deliver(peerId, { t: 'welcome', id: peerId, resumeToken: existingPeer.resumeToken, room: this.snapshot() });
+      this.deliver(peerId, { t: 'hand', tiles: existingPeer.hand, replace: true });
+      return;
+    }
+    const name = sanitizeName(rawName);
+    if (!name) return this.deliver(peerId, { t: 'error', message: 'Enter a player name.' });
+    const resuming = (resumeToken
       ? this.players.find(player => player.resumeToken === resumeToken && !player.connected)
-      : undefined;
+      : undefined)
+      ?? this.players.find(player => !player.connected && player.name.toLocaleLowerCase() === name.toLocaleLowerCase());
     if (resuming) {
       const previousId = resuming.id;
       resuming.id = peerId;
@@ -154,8 +156,6 @@ export class LocalRoomHost {
     }
     if (this.phase !== 'lobby') return this.deliver(peerId, { t: 'error', message: 'A game is already in progress.' });
     if (this.players.length >= MAX_PLAYERS) return this.deliver(peerId, { t: 'error', message: 'This nearby game is full.' });
-    const name = sanitizeName(rawName);
-    if (!name) return this.deliver(peerId, { t: 'error', message: 'Enter a player name.' });
     const existing = new Set(this.players.map(player => player.name.toLowerCase()));
     let unique = name;
     let suffix = 2;
@@ -175,7 +175,7 @@ export class LocalRoomHost {
   }
 
   private start(peerId: string): void {
-    if (this.phase !== 'lobby' || peerId !== this.hostId || this.players.length < 2) return;
+    if (this.phase !== 'lobby' || peerId !== this.hostId || this.players.filter(player => player.connected).length < 2) return;
     this.deal(false);
   }
 

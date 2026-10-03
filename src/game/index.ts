@@ -78,6 +78,7 @@ export function createTiles(root: HTMLElement): void {
   const copyLink = root.querySelector<HTMLButtonElement>('[data-copy-link]')!;
   const share = root.querySelector<HTMLButtonElement>('[data-share]')!;
   const lobbyHelp = root.querySelector<HTMLElement>('.lobby-help')!;
+  const lobbyTitle = root.querySelector<HTMLElement>('[data-lobby-title]')!;
   const board = root.querySelector<HTMLElement>('[data-board]')!;
   const boardLayer = root.querySelector<HTMLElement>('[data-board-layer]')!;
   const boardLabel = root.querySelector<HTMLElement>('[data-board-label]')!;
@@ -137,6 +138,7 @@ export function createTiles(root: HTMLElement): void {
   let nearbyConnectingId: string | null = null;
   let nearbyReconnectAttempt = 0;
   let nearbyReconnectTimer: number | null = null;
+  let nearbyHelloTimer: number | null = null;
   let nearbyName = '';
   let nearbyPermissionAliases: string[] | undefined;
   const selectedNearbyIds = new Set<string>();
@@ -520,6 +522,11 @@ export function createTiles(root: HTMLElement): void {
     nearbyReconnectTimer = null;
   }
 
+  function clearNearbyHelloTimer(): void {
+    if (nearbyHelloTimer != null) window.clearTimeout(nearbyHelloTimer);
+    nearbyHelloTimer = null;
+  }
+
   function sendNearby(endpointId: string, message: object): void {
     void NearbyConnections.send({ endpointIds: [endpointId], payload: JSON.stringify(message) }).catch(() => {
       if (connectionMode === 'nearby-join' && nearbyHostId === endpointId) beginNearbyReconnect();
@@ -528,12 +535,34 @@ export function createTiles(root: HTMLElement): void {
 
   function beginNearbyReconnect(): void {
     if (connectionMode !== 'nearby-join') return;
+    clearNearbyHelloTimer();
     nearbyHostId = null;
     transportSend = null;
     nearbyAutoReconnect = true;
     nearbyConnectingId = null;
     connectionLost('Nearby connection lost. Reconnecting…');
     scheduleNearbyTransport(0);
+  }
+
+  function showNearbyLobbyLoading(hostName: string, message = 'Connecting securely…'): void {
+    nameGate.hidden = true;
+    game.hidden = true;
+    lobby.hidden = false;
+    lobbyTitle.textContent = `Joining ${hostName}'s game`;
+    roomLabels.forEach(label => { label.textContent = 'Local'; });
+    roster.innerHTML = `<li class="is-loading">${escapeHtml(message)}</li>`;
+    onlineInvite.hidden = true;
+    dictionarySelect.disabled = true;
+    start.hidden = true;
+    lobbyHelp.textContent = 'Keep this screen open while the nearby lobby connects.';
+  }
+
+  function sendNearbyHello(): void {
+    if (connectionMode !== 'nearby-join' || !nearbyHostId || myId) return;
+    const resumeToken = localStorage.getItem(sessionKey()) ?? undefined;
+    sendNearby(nearbyHostId, { t: 'hello', v: PROTOCOL_VERSION, name: nearbyName, resumeToken });
+    clearNearbyHelloTimer();
+    nearbyHelloTimer = window.setTimeout(sendNearbyHello, 900);
   }
 
   function scheduleNearbyTransport(delay?: number): void {
@@ -583,7 +612,11 @@ export function createTiles(root: HTMLElement): void {
 
   function renderNearbyEndpoints(): void {
     nearbyEndpoints.replaceChildren();
+    const renderedNames = new Set<string>();
     for (const endpoint of nearbyEndpointMap.values()) {
+      const normalizedName = endpoint.name.trim().toLocaleLowerCase();
+      if (renderedNames.has(normalizedName)) continue;
+      renderedNames.add(normalizedName);
       const button = document.createElement('button');
       button.type = 'button';
       button.textContent = `${endpoint.name}'s game`;
@@ -624,9 +657,23 @@ export function createTiles(root: HTMLElement): void {
     if (!invitation) return;
     setButtonLoading(accept ? inviteAccept : inviteDecline, true, accept ? 'Joining…' : 'Declining…');
     try {
+      if (accept) {
+        connectionMode = 'nearby-join';
+        nearbyHostName = invitation.name;
+        nearbyConnectingId = invitation.endpointId;
+        nearbyAutoReconnect = true;
+        showNearbyLobbyLoading(invitation.name);
+      }
       await NearbyConnections.acceptVerification({ endpointId: invitation.endpointId, accept });
       nearbyStatus.textContent = accept ? `Joining ${invitation.name}'s game…` : `Declined ${invitation.name}'s game.`;
     } catch {
+      if (accept) {
+        connectionMode = 'nearby-home';
+        nearbyConnectingId = null;
+        nearbyAutoReconnect = false;
+        nameGate.hidden = false;
+        lobby.hidden = true;
+      }
       show('Could not respond to the local game invitation.', 'bad');
     } finally {
       pendingNearbyInvite = null;
@@ -673,10 +720,8 @@ export function createTiles(root: HTMLElement): void {
     lobbyHelp.textContent = 'This is a local game connected directly to the nearby starter—no internet or invite link needed.';
     transportSend = message => sendNearby(endpoint.endpointId, message);
     void NearbyConnections.setKeepAwake({ enabled: true });
-    void NearbyConnections.stopAdvertising();
-    void NearbyConnections.stopDiscovery();
-    const resumeToken = localStorage.getItem(sessionKey()) ?? undefined;
-    send({ t: 'hello', v: PROTOCOL_VERSION, name: nearbyName, resumeToken });
+    showNearbyLobbyLoading(endpoint.name, 'Loading lobby…');
+    sendNearbyHello();
   }
 
   async function initializeNearby(): Promise<void> {
@@ -687,6 +732,12 @@ export function createTiles(root: HTMLElement): void {
     nearbyEntry.hidden = false;
 
     await NearbyConnections.addListener('endpointFound', endpoint => {
+      for (const [knownId, known] of nearbyEndpointMap) {
+        if (knownId !== endpoint.endpointId && known.name.trim().toLocaleLowerCase() === endpoint.name.trim().toLocaleLowerCase()) {
+          nearbyEndpointMap.delete(knownId);
+          selectedNearbyIds.delete(knownId);
+        }
+      }
       const isNew = !nearbyEndpointMap.has(endpoint.endpointId);
       nearbyEndpointMap.set(endpoint.endpointId, endpoint);
       if (connectionMode === 'nearby-home' && isNew) selectedNearbyIds.add(endpoint.endpointId);
@@ -831,6 +882,11 @@ export function createTiles(root: HTMLElement): void {
     if (dragging && next.phase !== 'playing') cancelDrag();
     const previousPhase = state?.phase;
     const dictionary = next.dictionary ?? 'scowl-gb';
+    clearNearbyHelloTimer();
+    if (connectionMode === 'nearby-join') {
+      void NearbyConnections.stopAdvertising();
+      void NearbyConnections.stopDiscovery();
+    }
     state = next;
     state.dictionary = dictionary;
     rememberGame(next);
@@ -842,9 +898,10 @@ export function createTiles(root: HTMLElement): void {
     players.innerHTML = next.players.map((player, index) =>
       `<li><span class="player-chip ${player.id === myId ? 'is-you' : ''} ${player.eliminated ? 'is-out' : ''} ${player.connected === false ? 'is-offline' : ''}" style="--owner-color:${ownerColor(index)}"><i></i><span>${escapeHtml(player.name)}</span><b>${player.connected === false ? 'OFFLINE' : player.eliminated ? 'OUT' : `${player.tilesLeft} loose`}</b></span></li>`
     ).join('');
+    const connectedPlayers = next.players.filter(player => player.connected !== false).length;
     start.hidden = myId !== next.hostId;
-    start.disabled = next.players.length < 2;
-    start.textContent = next.players.length < 2 ? 'Waiting for an opponent…' : `Start with ${next.players.length} players`;
+    start.disabled = connectedPlayers < 2;
+    start.textContent = connectedPlayers < 2 ? 'Waiting for an opponent…' : `Start with ${connectedPlayers} players`;
     dictionarySelect.value = dictionary;
     dictionarySelect.disabled = myId !== next.hostId || next.phase !== 'lobby';
     newGame.disabled = myId !== next.hostId || next.players.length < 2;
@@ -852,6 +909,7 @@ export function createTiles(root: HTMLElement): void {
     void loadDictionary(dictionary);
 
     nameGate.hidden = true;
+    lobbyTitle.textContent = 'Waiting for the bunch';
     lobby.hidden = next.phase !== 'lobby';
     game.hidden = next.phase === 'lobby';
     setButtonLoading(enterLobby, false);
@@ -1704,6 +1762,7 @@ export function createTiles(root: HTMLElement): void {
     connectionMode = null;
     stopOnlineTransport();
     clearNearbyReconnectTimer();
+    clearNearbyHelloTimer();
     transportSend = null;
     localHost = null;
     nearbyHostId = null;

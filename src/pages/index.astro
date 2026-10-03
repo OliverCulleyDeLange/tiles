@@ -44,7 +44,7 @@
       <header>
         <div>
           <p class="eyebrow">Room <span data-room-label></span></p>
-          <h1>Waiting for the bunch</h1>
+          <h1 data-lobby-title>Waiting for the bunch</h1>
         </div>
         <div class="lobby-nav">
           <button type="button" data-lobby-back>← Back</button>
@@ -215,6 +215,8 @@
   .live-pill { flex: 0 0 auto; border: 2px solid var(--tr-ink); background: #c8ffcf; border-radius: 999px; padding: .35rem .7rem; font-weight: 800; }
   .roster { list-style: none; padding: 0; margin: 2rem 0; display: grid; gap: .55rem; }
   .roster li { display: flex; align-items: center; gap: .7rem; padding: .8rem; background: #fff; border: 2px solid var(--tr-ink); border-radius: 10px; }
+  .roster li.is-loading { color: #6b6044; }
+  .roster li.is-loading::before { content: ''; width: 1rem; height: 1rem; flex: 0 0 auto; border: 2px solid #b4aa88; border-top-color: var(--tr-ink); border-radius: 50%; animation: button-spin .7s linear infinite; }
   .roster em { margin-left: auto; font-size: .75rem; font-style: normal; text-transform: uppercase; }
   .presence { width: .7rem; height: .7rem; border-radius: 50%; background: #2bb36c; box-shadow: 0 0 0 3px #ccf4dd; }
   .presence.is-offline { background: #99917a; box-shadow: 0 0 0 3px #e4deca; }
