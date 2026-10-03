@@ -32,6 +32,7 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
     private var discoverer: Discoverer?
     private var endpointNames: [EndpointID: String] = [:]
     private var verifications: [EndpointID: (Bool) -> Void] = [:]
+    private var connectedEndpoints: Set<EndpointID> = []
     private var localName = "Tiles player"
     private var isAdvertising = false
     private var isDiscovering = false
@@ -144,9 +145,14 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
         isDiscovering = false
         advertiser?.stopAdvertising()
         discoverer?.stopDiscovery()
+        if let manager {
+            for endpointID in connectedEndpoints {
+                manager.disconnect(from: endpointID)
+            }
+        }
+        connectedEndpoints.removeAll()
         advertiser = nil
         discoverer = nil
-        manager = nil
         DispatchQueue.main.async { UIApplication.shared.isIdleTimerDisabled = false }
         call.resolve()
     }
@@ -199,8 +205,12 @@ extension NearbyConnectionsPlugin: ConnectionManagerDelegate {
 
     public func connectionManager(_ connectionManager: ConnectionManager, didChangeTo state: ConnectionState, for endpointID: EndpointID) {
         switch state {
-        case .connected: notifyListeners("connected", data: endpoint(endpointID))
-        case .disconnected, .rejected: notifyListeners("disconnected", data: endpoint(endpointID))
+        case .connected:
+            connectedEndpoints.insert(endpointID)
+            notifyListeners("connected", data: endpoint(endpointID))
+        case .disconnected, .rejected:
+            connectedEndpoints.remove(endpointID)
+            notifyListeners("disconnected", data: endpoint(endpointID))
         case .connecting: break
         }
     }

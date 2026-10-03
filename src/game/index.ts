@@ -914,12 +914,21 @@ export function createTiles(root: HTMLElement): void {
   function beginNearbyReconnect(): void {
     if (connectionMode !== 'nearby-join') return;
     if (nearbyHostName) setNearbyPeerState(nearbyHostName, 'disconnected', 'Nearby link lost · restarting discovery');
+    if (state) {
+      const host = state.players.find(player => player.id === state?.hostId);
+      if (host?.connected !== false) {
+        updateRoom({
+          ...state,
+          players: state.players.map(player => player.id === state?.hostId ? { ...player, connected: false } : player),
+        });
+      }
+    }
     clearNearbyHelloTimer();
     nearbyHostId = null;
     transportSend = null;
     nearbyAutoReconnect = true;
     nearbyConnectingId = null;
-    connectionLost('Nearby connection lost. Reconnecting…');
+    connectionLost('Host disconnected. Game paused while reconnecting…');
     scheduleNearbyTransport(0);
   }
 
@@ -1090,7 +1099,11 @@ export function createTiles(root: HTMLElement): void {
     playerDisconnect.replaceChildren();
     if (playerDisconnect.hidden) return;
     const message = document.createElement('span');
-    message.textContent = `${disconnected.map(player => player.name).join(', ')} disconnected — waiting for them to rejoin.`;
+    const hostDisconnected = connectionMode === 'nearby-join'
+      && disconnected.some(player => player.id === room.hostId);
+    message.textContent = hostDisconnected
+      ? `${disconnected.find(player => player.id === room.hostId)?.name ?? 'Host'} disconnected — game paused while reconnecting.`
+      : `${disconnected.map(player => player.name).join(', ')} disconnected — waiting for them to rejoin.`;
     playerDisconnect.append(message);
     if (connectionMode !== 'nearby-host') return;
     for (const player of disconnected) {
