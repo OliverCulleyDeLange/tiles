@@ -34,6 +34,12 @@ interface Point { x: number; y: number }
 interface Camera { x: number; y: number; scale: number; rotation: number }
 interface Gesture { center: Point; distance: number; angle: number; camera: Camera; world?: Point; rotate?: boolean }
 interface FoundWord { text: string; tileIds: string[] }
+interface EditSnapshot {
+  positions: Array<{ id: string; x: number | null; y: number | null }>;
+  rackOrder: Array<string | null>;
+  selectedId: string | null;
+  selectedIds: string[];
+}
 interface SavedGame {
   kind: 'online';
   room: string;
@@ -99,6 +105,8 @@ export function createTiles(root: HTMLElement): void {
   const players = root.querySelector<HTMLElement>('[data-players]')!;
   const resetView = root.querySelector<HTMLButtonElement>('[data-reset-view]')!;
   const fillDirection = root.querySelector<HTMLButtonElement>('[data-fill-direction]')!;
+  const undoButton = root.querySelector<HTMLButtonElement>('[data-undo]')!;
+  const redoButton = root.querySelector<HTMLButtonElement>('[data-redo]')!;
   const toast = root.querySelector<HTMLElement>('[data-toast]')!;
   const nearbyEntry = root.querySelector<HTMLElement>('[data-nearby-entry]')!;
   const nearbyStartButton = root.querySelector<HTMLButtonElement>('[data-nearby-start]')!;
@@ -180,6 +188,8 @@ export function createTiles(root: HTMLElement): void {
   let nativeGesture: { camera: Camera; x: number; y: number } | null = null;
   let autoFillDirection: 'right' | 'down' = 'right';
   let viewingPlayerId: string | null = null;
+  const undoStack: EditSnapshot[] = [];
+  const redoStack: EditSnapshot[] = [];
   let toastTimer: number | null = null;
 
   function readSavedGames(): SavedGame[] {
@@ -418,6 +428,7 @@ export function createTiles(root: HTMLElement): void {
     else if (message.t === 'new-game') {
       setButtonLoading(newGame, false);
       cancelDrag();
+      clearEditHistory();
       tiles = [];
       rackOrder = [];
       selectedId = null;
@@ -429,11 +440,15 @@ export function createTiles(root: HTMLElement): void {
       if (!player) return;
       player.board = message.board;
       player.tilesLeft = player.tiles.length - message.board.length;
-      if (message.playerId === myId) syncOwnBoard(state!);
+      if (message.playerId === myId) {
+        syncOwnBoard(state!);
+        clearEditHistory();
+      }
       if (!dragging && !gesture && !nativeGesture) renderTiles();
     } else if (message.t === 'hand') {
       setButtonLoading(dump, false);
       if (message.replace) {
+        clearEditHistory();
         const previous = new Map(tiles.map(tile => [tile.id, tile]));
         const restored = new Map((state?.players.find(player => player.id === myId)?.board ?? []).map(tile => [tile.id, tile]));
         tiles = message.tiles.map(tile => {
@@ -1061,6 +1076,7 @@ export function createTiles(root: HTMLElement): void {
       rack.append(slot);
     }
     dump.disabled = !selectedId || (state?.bunch ?? 0) < 3 || state?.phase !== 'playing';
+    updateHistoryButtons();
     maybePeel();
   }
 
@@ -1206,8 +1222,10 @@ export function createTiles(root: HTMLElement): void {
       renderTiles();
       return;
     }
+    const before = editSnapshot();
     const rect = board.getBoundingClientRect();
     let layoutChanged = false;
+    let historyChanged = false;
     if (tile && pointInRect(event.clientX, event.clientY, rect)) {
       const world = screenToWorld(event.clientX, event.clientY);
       const x = Math.round(world.x / TILE);
@@ -1231,6 +1249,7 @@ export function createTiles(root: HTMLElement): void {
         selectedIds.add(tile.id);
         selectedId = tile.id;
         layoutChanged = true;
+        historyChanged = true;
       } else if (occupied) {
         show(occupied.ownerId === myId ? 'That row cannot be shifted further.' : `${occupied.ownerName}'s tile is already there.`, 'bad');
       } else {
@@ -1242,27 +1261,31 @@ export function createTiles(root: HTMLElement): void {
         moving.forEach(id => selectedIds.add(id));
         selectedId = tile.id;
         layoutChanged = true;
+        historyChanged = true;
       }
     } else if (tile && !interaction.wasPlaced && pointInRect(event.clientX, event.clientY, rack.getBoundingClientRect())) {
-      reorderRack(tile.id, event.clientX, event.clientY);
+      historyChanged = reorderRack(tile.id, event.clientX, event.clientY);
     } else if (tile && interaction.dragIds.length) {
       for (const id of interaction.dragIds) {
         const value = tiles.find(candidate => candidate.id === id);
         if (value) { value.x = null; value.y = null; }
       }
       if (pointInRect(event.clientX, event.clientY, rackWrap.getBoundingClientRect())) {
-        reorderRack(tile.id, event.clientX, event.clientY);
+        historyChanged = reorderRack(tile.id, event.clientX, event.clientY) || historyChanged;
       }
       selectedIds.clear();
       selectedId = null;
       layoutChanged = interaction.wasPlaced;
+      historyChanged = historyChanged || interaction.wasPlaced;
     }
     finishDrag(interaction);
+    if (historyChanged) recordEdit(before);
     if (layoutChanged) sendOwnLayout();
     renderTiles();
   }
 
   function placeFirstTile(tile: LocalTile): void {
+    const before = editSnapshot();
     const myIndex = state?.players.findIndex(player => player.id === myId) ?? 0;
     const area = areaFor(state?.players[myIndex], myIndex, state?.players.length ?? 1);
     const rotation = area?.rotation ?? 0;
@@ -1273,6 +1296,7 @@ export function createTiles(root: HTMLElement): void {
     selectedIds.clear();
     selectedIds.add(tile.id);
     selectedId = tile.id;
+    recordEdit(before);
     sendOwnLayout();
   }
 
@@ -1302,11 +1326,13 @@ export function createTiles(root: HTMLElement): void {
       return;
     }
 
+    const before = editSnapshot();
     tile.x = targetX;
     tile.y = targetY;
     selectedIds.clear();
     selectedIds.add(tile.id);
     selectedId = tile.id;
+    recordEdit(before);
     sendOwnLayout();
   }
 
@@ -1369,6 +1395,58 @@ export function createTiles(root: HTMLElement): void {
     send({ t: 'layout', board });
   }
 
+  function editSnapshot(): EditSnapshot {
+    return {
+      positions: tiles.map(tile => ({ id: tile.id, x: tile.x, y: tile.y })),
+      rackOrder: [...rackOrder],
+      selectedId,
+      selectedIds: [...selectedIds],
+    };
+  }
+
+  function snapshotsMatch(a: EditSnapshot, b: EditSnapshot): boolean {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+
+  function updateHistoryButtons(): void {
+    const editable = canEditTiles();
+    undoButton.disabled = !editable || undoStack.length === 0;
+    redoButton.disabled = !editable || redoStack.length === 0;
+  }
+
+  function recordEdit(before: EditSnapshot): void {
+    if (snapshotsMatch(before, editSnapshot())) return;
+    undoStack.push(before);
+    if (undoStack.length > 60) undoStack.shift();
+    redoStack.length = 0;
+    updateHistoryButtons();
+  }
+
+  function restoreEdit(snapshot: EditSnapshot): void {
+    const positions = new Map(snapshot.positions.map(position => [position.id, position]));
+    for (const tile of tiles) {
+      const position = positions.get(tile.id);
+      if (!position) continue;
+      tile.x = position.x;
+      tile.y = position.y;
+    }
+    const validIds = tiles.map(tile => tile.id);
+    const valid = new Set(validIds);
+    rackOrder = snapshot.rackOrder.map(id => id && valid.has(id) ? id : null);
+    addRackTiles(validIds.filter(id => !rackOrder.includes(id)));
+    selectedIds.clear();
+    snapshot.selectedIds.filter(id => valid.has(id)).forEach(id => selectedIds.add(id));
+    selectedId = snapshot.selectedId && valid.has(snapshot.selectedId) ? snapshot.selectedId : null;
+    sendOwnLayout();
+    renderTiles();
+  }
+
+  function clearEditHistory(): void {
+    undoStack.length = 0;
+    redoStack.length = 0;
+    updateHistoryButtons();
+  }
+
   function addRackTiles(ids: string[]): void {
     for (const id of ids) {
       if (rackOrder.includes(id)) continue;
@@ -1402,9 +1480,9 @@ export function createTiles(root: HTMLElement): void {
     if (dragging === interaction) dragging = null;
   }
 
-  function reorderRack(tileId: string, clientX: number, clientY: number): void {
+  function reorderRack(tileId: string, clientX: number, clientY: number): boolean {
     const tile = tiles.find(value => value.id === tileId);
-    if (!tile) return;
+    if (!tile) return false;
     let sourceIndex = rackOrder.indexOf(tileId);
     if (sourceIndex < 0) {
       addRackTiles([tileId]);
@@ -1421,17 +1499,18 @@ export function createTiles(root: HTMLElement): void {
       return distance < closestDistance ? candidate : closest;
     }, null);
     const targetIndex = Number(targetSlot?.dataset.rackIndex ?? -1);
-    if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return;
+    if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return false;
     const targetId = rackOrder[targetIndex];
     const targetTile = targetId ? tiles.find(value => value.id === targetId) : undefined;
     if (!targetId || (targetTile && targetTile.x != null && targetTile.y != null)) {
       [rackOrder[sourceIndex], rackOrder[targetIndex]] = [rackOrder[targetIndex], rackOrder[sourceIndex]];
-      return;
+      return true;
     }
     const emptyIndex = rackOrder.findIndex(value => value == null || tiles.find(candidate => candidate.id === value)?.x != null);
     if (emptyIndex >= 0) rackOrder[emptyIndex] = null;
     rackOrder.splice(sourceIndex, 1);
     rackOrder.splice(targetIndex, 0, tileId);
+    return true;
   }
 
   function clearSelection(): void {
@@ -1898,6 +1977,18 @@ export function createTiles(root: HTMLElement): void {
     fillDirection.textContent = `Fill ${arrow}`;
     fillDirection.setAttribute('aria-label', `Autofill ${autoFillDirection}`);
     renderTiles();
+  });
+  undoButton.addEventListener('click', () => {
+    const previous = undoStack.pop();
+    if (!previous) return;
+    redoStack.push(editSnapshot());
+    restoreEdit(previous);
+  });
+  redoButton.addEventListener('click', () => {
+    const next = redoStack.pop();
+    if (!next) return;
+    undoStack.push(editSnapshot());
+    restoreEdit(next);
   });
   resetView.addEventListener('click', () => {
     focusPlayer(myId);
