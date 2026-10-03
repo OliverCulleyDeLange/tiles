@@ -70,6 +70,7 @@ export function createTiles(root: HTMLElement): void {
   const game = root.querySelector<HTMLElement>('[data-view="game"]')!;
   const nameForm = root.querySelector<HTMLFormElement>('[data-name-form]')!;
   const nameInput = root.querySelector<HTMLInputElement>('[data-name-input]')!;
+  const homeOptions = root.querySelector<HTMLElement>('[data-home-options]')!;
   const enterLobby = root.querySelector<HTMLButtonElement>('[data-enter-lobby]')!;
   const savedGames = root.querySelector<HTMLElement>('[data-saved-games]')!;
   const savedGameList = root.querySelector<HTMLElement>('[data-saved-game-list]')!;
@@ -103,6 +104,7 @@ export function createTiles(root: HTMLElement): void {
   const bunch = root.querySelector<HTMLElement>('[data-bunch]')!;
   const peel = root.querySelector<HTMLElement>('[data-peel]')!;
   const players = root.querySelector<HTMLElement>('[data-players]')!;
+  const playerDisconnect = root.querySelector<HTMLElement>('[data-player-disconnect]')!;
   const resetView = root.querySelector<HTMLButtonElement>('[data-reset-view]')!;
   const fillDirection = root.querySelector<HTMLButtonElement>('[data-fill-direction]')!;
   const undoButton = root.querySelector<HTMLButtonElement>('[data-undo]')!;
@@ -133,6 +135,7 @@ export function createTiles(root: HTMLElement): void {
     roomNote.textContent = `Private room ${roomName} · 2–8 players`;
   }
   nameInput.value = localStorage.getItem('tiles-name') ?? '';
+  updateHomeReadiness();
   if (!Capacitor.isNativePlatform()) nameInput.focus();
 
   let socket: WebSocket | null = null;
@@ -635,6 +638,9 @@ export function createTiles(root: HTMLElement): void {
       await NearbyConnections.setKeepAwake({ enabled: true });
       if (connectionMode === 'nearby-host') {
         await NearbyConnections.startAdvertising({ name: nearbyName });
+        if (state?.players.some(player => player.connected === false)) {
+          await NearbyConnections.startDiscovery({ name: nearbyName });
+        }
         nearbyReconnectAttempt = 0;
         return;
       }
@@ -660,6 +666,12 @@ export function createTiles(root: HTMLElement): void {
     return name;
   }
 
+  function updateHomeReadiness(): void {
+    const ready = !!sanitizeName(nameInput.value);
+    homeOptions.classList.toggle('is-ready', ready);
+    homeOptions.setAttribute('aria-hidden', String(!ready));
+  }
+
   async function requestNearbyPermissions(): Promise<void> {
     if (Capacitor.getPlatform() === 'android') await NearbyConnections.ensurePermissions();
     else await NearbyConnections.requestPermissions(nearbyPermissionAliases?.length ? { permissions: nearbyPermissionAliases } : undefined);
@@ -670,8 +682,8 @@ export function createTiles(root: HTMLElement): void {
     const playerNames = new Set(room.players.map(player => player.name.trim().toLocaleLowerCase()));
     const playerRows = room.players.map(player => {
       const localAccepted = connectionMode === 'nearby-host' && player.id !== room.hostId && player.connected !== false;
-      const status = player.connected === false ? 'Reconnecting' : player.id === room.hostId ? 'Host' : localAccepted ? 'Accepted' : '';
-      return `<li><span class="presence ${player.connected === false ? 'is-offline' : ''}" aria-hidden="true"></span><strong>${escapeHtml(player.name)}</strong>${status ? `<em class="invite-state ${status.toLowerCase()}">${status}</em>` : ''}</li>`;
+      const status = player.connected === false ? 'Disconnected' : player.id === room.hostId ? 'Host' : localAccepted ? 'Accepted' : '';
+      return `<li><span class="presence ${player.connected === false ? 'is-offline' : ''}" aria-hidden="true"></span><strong>${escapeHtml(player.name)}</strong>${status ? `<em class="invite-state ${status.toLowerCase()}">${status}</em>` : ''}${inviteButton(player)}</li>`;
     });
     const inviteRows = connectionMode === 'nearby-host'
       ? [...nearbyInviteStates.values()]
@@ -679,6 +691,63 @@ export function createTiles(root: HTMLElement): void {
         .map(invite => `<li><span class="presence invite-pending" aria-hidden="true"></span><strong>${escapeHtml(invite.name)}</strong><em class="invite-state ${invite.status}">${invite.status}</em></li>`)
       : [];
     roster.innerHTML = [...playerRows, ...inviteRows].join('');
+  }
+
+  function endpointForPlayer(name: string): NearbyEndpoint | undefined {
+    const normalized = name.trim().toLocaleLowerCase();
+    return [...nearbyEndpointMap.values()].find(endpoint => endpoint.name.trim().toLocaleLowerCase() === normalized);
+  }
+
+  function inviteButton(player: PlayerSummary): string {
+    if (connectionMode !== 'nearby-host' || player.connected !== false || player.id === state?.hostId) return '';
+    const endpoint = endpointForPlayer(player.name);
+    const invite = endpoint ? nearbyInviteStates.get(endpoint.endpointId) : undefined;
+    const pending = endpoint ? outgoingNearbyInvites.has(endpoint.endpointId) : false;
+    const label = invite?.status === 'received' ? 'Received' : pending ? 'Inviting…' : 'Invite';
+    return `<button type="button" class="reinvite-player" data-reinvite-endpoint="${escapeHtml(endpoint?.endpointId ?? '')}" ${!endpoint || pending ? 'disabled' : ''}>${label}</button>`;
+  }
+
+  function renderPlayerDisconnect(room: RoomSnapshot): void {
+    const disconnected = room.players.filter(player => player.connected === false && !player.eliminated);
+    playerDisconnect.hidden = room.phase === 'lobby' || disconnected.length === 0;
+    playerDisconnect.replaceChildren();
+    if (playerDisconnect.hidden) return;
+    const message = document.createElement('span');
+    message.textContent = `${disconnected.map(player => player.name).join(', ')} disconnected — waiting for them to rejoin.`;
+    playerDisconnect.append(message);
+    if (connectionMode !== 'nearby-host') return;
+    for (const player of disconnected) {
+      const endpoint = endpointForPlayer(player.name);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'reinvite-player';
+      button.dataset.reinviteEndpoint = endpoint?.endpointId ?? '';
+      button.disabled = !endpoint || outgoingNearbyInvites.has(endpoint.endpointId);
+      button.textContent = endpoint && outgoingNearbyInvites.has(endpoint.endpointId) ? 'Inviting…' : `Invite ${player.name}`;
+      playerDisconnect.append(button);
+    }
+  }
+
+  async function reinviteNearbyPlayer(endpointId: string): Promise<void> {
+    const endpoint = nearbyEndpointMap.get(endpointId);
+    if (!endpoint || outgoingNearbyInvites.has(endpointId)) return;
+    outgoingNearbyInvites.add(endpointId);
+    nearbyInviteStates.set(endpointId, { name: endpoint.name, status: 'requested' });
+    if (state) {
+      renderLobbyRoster(state);
+      renderPlayerDisconnect(state);
+    }
+    try {
+      await NearbyConnections.requestConnection({ endpointId, name: nearbyName });
+    } catch {
+      outgoingNearbyInvites.delete(endpointId);
+      nearbyInviteStates.delete(endpointId);
+      if (state) {
+        renderLobbyRoster(state);
+        renderPlayerDisconnect(state);
+      }
+      show(`${endpoint.name} could not be invited.`, 'bad');
+    }
   }
 
   function renderNearbyEndpoints(): void {
@@ -818,6 +887,10 @@ export function createTiles(root: HTMLElement): void {
       nearbyEndpointMap.set(endpoint.endpointId, endpoint);
       if (connectionMode === 'nearby-home' && isNew) selectedNearbyIds.add(endpoint.endpointId);
       renderNearbyEndpoints();
+      if (state && connectionMode === 'nearby-host') {
+        renderLobbyRoster(state);
+        renderPlayerDisconnect(state);
+      }
       if (connectionMode === 'nearby-join' && nearbyAutoReconnect && !nearbyHostId && !nearbyConnectingId
         && (!nearbyHostName || endpoint.name === nearbyHostName)) {
         nearbyConnectingId = endpoint.endpointId;
@@ -833,12 +906,19 @@ export function createTiles(root: HTMLElement): void {
       selectedNearbyIds.delete(endpoint.endpointId);
       if (nearbyConnectingId === endpoint.endpointId) nearbyConnectingId = null;
       renderNearbyEndpoints();
+      if (state && connectionMode === 'nearby-host') {
+        renderLobbyRoster(state);
+        renderPlayerDisconnect(state);
+      }
     });
     await NearbyConnections.addListener('verificationRequired', verification => {
       if (connectionMode === 'nearby-host' && outgoingNearbyInvites.has(verification.endpointId)) {
         const invite = nearbyInviteStates.get(verification.endpointId);
         if (invite) invite.status = 'received';
-        if (state) renderLobbyRoster(state);
+        if (state) {
+          renderLobbyRoster(state);
+          renderPlayerDisconnect(state);
+        }
         void NearbyConnections.acceptVerification({ endpointId: verification.endpointId, accept: true });
         return;
       }
@@ -854,8 +934,11 @@ export function createTiles(root: HTMLElement): void {
       if (localHost) {
         const invite = nearbyInviteStates.get(endpoint.endpointId);
         if (invite) invite.status = 'accepted';
-        if (state) renderLobbyRoster(state);
         outgoingNearbyInvites.delete(endpoint.endpointId);
+        if (state) {
+          renderLobbyRoster(state);
+          renderPlayerDisconnect(state);
+        }
         nearbyReconnectAttempt = 0;
         nearbyStatus.textContent = `${endpoint.name} connected.`;
         return;
@@ -912,6 +995,7 @@ export function createTiles(root: HTMLElement): void {
       stopOnlineTransport();
       await NearbyConnections.setKeepAwake({ enabled: true });
       await NearbyConnections.startAdvertising({ name });
+      if (restored) await NearbyConnections.startDiscovery({ name });
       roomName = 'nearby';
       if (!restored) {
         localStorage.removeItem(LOCAL_GAME_KEY);
@@ -995,6 +1079,7 @@ export function createTiles(root: HTMLElement): void {
     players.innerHTML = next.players.map((player, index) =>
       `<li><button type="button" data-view-player="${escapeHtml(player.id)}" class="player-chip ${player.id === myId ? 'is-you' : ''} ${viewingPlayerId === player.id ? 'is-viewing' : ''} ${player.eliminated ? 'is-out' : ''} ${player.connected === false ? 'is-offline' : ''}" style="--owner-color:${ownerColor(index)}"><i></i><span>${escapeHtml(player.name)}</span><b>${player.connected === false ? 'OFFLINE' : player.eliminated ? 'OUT' : `${player.tilesLeft} loose`}</b></button></li>`
     ).join('');
+    renderPlayerDisconnect(next);
     const connectedPlayers = next.players.filter(player => player.connected !== false).length;
     start.hidden = myId !== next.hostId;
     start.disabled = connectedPlayers < 2;
@@ -1597,7 +1682,7 @@ export function createTiles(root: HTMLElement): void {
     for (const word of findWords(values, rotation)) {
       const status = dictionaryWords.has(word.text) ? 'valid' : 'invalid';
       for (const id of word.tileIds) {
-        if (status === 'invalid' || !result.has(id)) result.set(id, status);
+        if (status === 'valid' || !result.has(id)) result.set(id, status);
       }
     }
     return result;
@@ -1818,12 +1903,19 @@ export function createTiles(root: HTMLElement): void {
     renderSavedGames();
   });
   nearbyStartButton.addEventListener('click', () => { void startSelectedLocalGame(); });
+  const handleReinviteClick = (event: Event): void => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-reinvite-endpoint]');
+    if (button?.dataset.reinviteEndpoint) void reinviteNearbyPlayer(button.dataset.reinviteEndpoint);
+  };
+  roster.addEventListener('click', handleReinviteClick);
+  playerDisconnect.addEventListener('click', handleReinviteClick);
   inviteAccept.addEventListener('click', () => { void answerNearbyInvitation(true); });
   inviteDecline.addEventListener('click', () => { void answerNearbyInvitation(false); });
   inviteDialog.addEventListener('cancel', event => {
     event.preventDefault();
     void answerNearbyInvitation(false);
   });
+  nameInput.addEventListener('input', updateHomeReadiness);
   nameInput.addEventListener('change', async () => {
     const name = sanitizeName(nameInput.value);
     if (!name || state || !isNativeNearby()) return;

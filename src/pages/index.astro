@@ -16,31 +16,33 @@
   <main id="tiles" class="tiles" data-connection="online">
     <section class="entry-card" data-view="name">
       <div class="brand-mark" aria-label="Tiles"><span>T</span><span>I</span><span>L</span><span>E</span><span>S</span></div>
-      <form class="play-option online-option" data-name-form>
-        <div class="option-heading"><span>Online</span><h2>Play online</h2></div>
-        <p>Start a private game and invite players with a link or QR code.</p>
-        <label for="player-name">Player name</label>
-        <div class="name-row">
-          <input id="player-name" data-name-input maxlength="18" autocomplete="nickname" required />
-          <button type="submit" data-enter-lobby>Create online game</button>
+      <label class="player-name-field" for="player-name">
+        <span>Player name</span>
+        <input id="player-name" data-name-input form="online-game-form" maxlength="18" autocomplete="nickname" required />
+      </label>
+      <div class="home-options" data-home-options>
+        <form id="online-game-form" class="play-option online-option" data-name-form>
+          <div class="option-heading"><span>Online</span><h2>Play online</h2></div>
+          <p>Start a private game and invite players with a link or QR code.</p>
+          <button class="online-start" type="submit" data-enter-lobby>Create online game</button>
+          <p class="room-note" data-room-note>Uses an internet connection · 2–8 players</p>
+        </form>
+        <div class="play-option nearby-entry" data-nearby-entry hidden>
+          <div class="option-heading"><span>Offline</span><h2>Play nearby</h2></div>
+          <p>Invite players around you directly over Bluetooth and Wi-Fi.</p>
+          <strong class="nearby-label">Local players</strong>
+          <div class="nearby-endpoints" data-nearby-endpoints>
+            <div class="nearby-search"><span aria-hidden="true">…</span><p>Searching nearby…</p></div>
+          </div>
+          <button type="button" class="nearby-start" data-nearby-start hidden>Request game</button>
+          <small data-nearby-status hidden></small>
         </div>
-        <p class="room-note" data-room-note>Uses an internet connection · 2–8 players</p>
-      </form>
-      <div class="play-option nearby-entry" data-nearby-entry hidden>
-        <div class="option-heading"><span>Offline</span><h2>Play nearby</h2></div>
-        <p>Invite players around you directly over Bluetooth and Wi-Fi.</p>
-        <strong class="nearby-label">Local players</strong>
-        <div class="nearby-endpoints" data-nearby-endpoints>
-          <div class="nearby-search"><span aria-hidden="true">…</span><p>Searching nearby…</p></div>
-        </div>
-        <button type="button" class="nearby-start" data-nearby-start hidden>Request game</button>
-        <small data-nearby-status hidden></small>
+        <section class="saved-games" data-saved-games hidden>
+          <p class="eyebrow">Saved on this device</p>
+          <h2>Continue a game</h2>
+          <div class="saved-game-list" data-saved-game-list></div>
+        </section>
       </div>
-      <section class="saved-games" data-saved-games hidden>
-        <p class="eyebrow">Saved on this device</p>
-        <h2>Continue a game</h2>
-        <div class="saved-game-list" data-saved-game-list></div>
-      </section>
     </section>
 
     <section class="lobby-card" data-view="lobby" hidden>
@@ -106,6 +108,7 @@
           <div><dt>Peels</dt><dd data-peel>0</dd></div>
         </dl>
       </header>
+      <div class="player-disconnect-notice" data-player-disconnect role="status" aria-live="polite" hidden></div>
       <div class="play-layout">
         <div class="board" data-board aria-label="Shared crossword table">
           <div class="board-label" data-board-label>Shared table</div>
@@ -120,8 +123,8 @@
       <section class="rack-wrap" aria-label="Loose tiles">
         <div class="rack" data-rack></div>
         <div class="rack-actions">
-          <button type="button" class="history-button" data-undo aria-label="Undo" title="Undo" disabled>↶</button>
-          <button type="button" class="history-button" data-redo aria-label="Redo" title="Redo" disabled>↷</button>
+          <button type="button" class="history-button" data-undo disabled>Undo</button>
+          <button type="button" class="history-button" data-redo disabled>Redo</button>
           <button type="button" class="direction-button" data-fill-direction aria-label="Autofill right">Fill →</button>
           <button type="button" class="dump-button" data-dump disabled>Dump</button>
           <button type="button" class="menu-button" data-game-menu-open>Menu</button>
@@ -194,10 +197,17 @@
   .option-heading h2 { margin: 0; font: 900 1.55rem/1 Georgia, serif; }
   .play-option > p { margin: .45rem 0 .9rem; color: #6b6044; font-size: .84rem; line-height: 1.4; }
   .tiles label { display: block; margin-bottom: .45rem; font-weight: 800; }
-  .name-row { display: grid; grid-template-columns: 1fr auto; gap: .6rem; }
-  .name-row input, .name-row button, .primary-action, .dump-button, .menu-button { min-height: 3.2rem; border: 2px solid var(--tr-ink); border-radius: 10px; font: 800 1rem/1 inherit; }
-  .name-row input { min-width: 0; padding: .7rem .9rem; background: #fff; color: var(--tr-ink); caret-color: var(--tr-ink); }
-  .name-row button, .primary-action { padding: .7rem 1.1rem; background: var(--tr-yellow); color: var(--tr-ink); box-shadow: 3px 3px 0 var(--tr-ink); cursor: pointer; }
+  .player-name-field { display: grid !important; gap: .45rem; margin: 0 0 1rem; }
+  .player-name-field span { font-weight: 800; }
+  .player-name-field input, .online-start, .primary-action, .dump-button, .menu-button { min-height: 3.2rem; border: 2px solid var(--tr-ink); border-radius: 10px; font: 800 1rem/1 inherit; }
+  .player-name-field input { width: 100%; min-width: 0; padding: .7rem .9rem; background: #fff; color: var(--tr-ink); caret-color: var(--tr-ink); }
+  .online-start, .primary-action { width: 100%; padding: .7rem 1.1rem; background: var(--tr-yellow); color: var(--tr-ink); box-shadow: 3px 3px 0 var(--tr-ink); cursor: pointer; }
+  .home-options { max-height: 0; opacity: 0; visibility: hidden; overflow: hidden; transform: translateY(12px); pointer-events: none; transition: max-height .45s ease, opacity .25s ease, transform .3s ease, visibility 0s linear .45s; }
+  .home-options.is-ready { max-height: 1600px; opacity: 1; visibility: visible; overflow: visible; transform: none; pointer-events: auto; transition-delay: 0s; }
+  .home-options.is-ready > * { animation: home-option-in .32s ease both; }
+  .home-options.is-ready > :nth-child(2) { animation-delay: .06s; }
+  .home-options.is-ready > :nth-child(3) { animation-delay: .12s; }
+  @keyframes home-option-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
   .saved-games { margin-top: 1.35rem; padding-top: 1.2rem; border-top: 2px solid var(--tr-ink); }
   .saved-games[hidden] { display: none; }
   .saved-games h2 { margin: .2rem 0 .75rem; font: 900 1.6rem/1 Georgia, serif; }
@@ -222,9 +232,9 @@
   .nearby-player input { width: 1.25rem; height: 1.25rem; flex: 0 0 auto; margin: 0; accent-color: #19734b; }
   .nearby-player span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .nearby-search { display: grid; width: 100%; justify-items: center; gap: .65rem; padding: 1rem 0 .35rem; color: #6b6044; }
-  .nearby-search span { display: grid; place-items: center; width: 3rem; aspect-ratio: 1; border: 2px solid var(--tr-ink); border-radius: 7px; background: var(--tr-yellow); color: var(--tr-ink); box-shadow: 3px 3px 0 var(--tr-ink); font: 900 1.6rem/1 Georgia, serif; animation: nearby-tile-spin 1.4s cubic-bezier(.55,.1,.45,.9) infinite; }
+  .nearby-search span { display: grid; place-items: center; width: 3rem; aspect-ratio: 1; border: 2px solid var(--tr-ink); border-radius: 7px; background: var(--tr-yellow); color: var(--tr-ink); box-shadow: 3px 3px 0 var(--tr-ink); font: 900 1.6rem/1 Georgia, serif; animation: nearby-tile-spin 1.4s steps(4, end) infinite; }
   .nearby-search p { margin: 0; font-size: .82rem; font-weight: 700; }
-  @keyframes nearby-tile-spin { 0% { transform: rotate(0deg); } 50% { transform: rotate(180deg) scale(1.08); } 100% { transform: rotate(360deg); } }
+  @keyframes nearby-tile-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   .lobby-card header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
   .lobby-card header > div { min-width: 0; }
   .lobby-card h1 { font-size: clamp(2.3rem, 7vw, 4rem); }
@@ -236,6 +246,8 @@
   .roster li.is-loading { color: #6b6044; }
   .roster li.is-loading::before { content: ''; width: 1rem; height: 1rem; flex: 0 0 auto; border: 2px solid #b4aa88; border-top-color: var(--tr-ink); border-radius: 50%; animation: button-spin .7s linear infinite; }
   .roster em { margin-left: auto; font-size: .75rem; font-style: normal; text-transform: uppercase; }
+  .reinvite-player { flex: 0 0 auto; min-height: 2rem; padding: .35rem .6rem; border: 1.5px solid var(--tr-ink); border-radius: 7px; background: var(--tr-yellow); color: var(--tr-ink); box-shadow: 1px 1px 0 var(--tr-ink); font: 800 .72rem/1 inherit; cursor: pointer; }
+  .reinvite-player:disabled { background: #ded8bd; opacity: .7; box-shadow: none; cursor: default; }
   .invite-state { padding: .25rem .45rem; border-radius: 999px; background: #e8e1c8; color: #5f5845; }
   .invite-state.received { background: #d7eaff; color: #24527d; }
   .invite-state.accepted { background: #d8f8e3; color: #17613d; }
@@ -273,7 +285,7 @@
   .copy-action { background: var(--tr-yellow); }
   .share-action { background: #fff; }
   .lobby-actions { display: grid; gap: .65rem; }
-  .game-shell { position: fixed; inset: 0; width: 100%; height: 100vh; height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: var(--tr-cream); overflow: hidden; }
+  .game-shell { position: fixed; inset: 0; width: 100%; height: 100vh; height: 100dvh; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; background: var(--tr-cream); overflow: hidden; }
   .game-shell[hidden], .entry-card[hidden], .lobby-card[hidden] { display: none; }
   .game-bar { min-width: 0; min-height: 48px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: .55rem; padding: max(.35rem, env(safe-area-inset-top)) max(.6rem, env(safe-area-inset-right)) .35rem max(.6rem, env(safe-area-inset-left)); border-bottom: 2px solid var(--tr-ink); background: var(--tr-yellow); }
   .compact-brand { display: flex; align-items: center; gap: .75rem; font-family: Georgia, serif; }
@@ -289,7 +301,7 @@
   .dump-button small { display: block; font-size: .65rem; text-transform: uppercase; }
   .dump-button:disabled { opacity: .42; cursor: default; box-shadow: none; }
   .rack-actions { width: 100%; display: flex; justify-content: flex-end; gap: .4rem; }
-  .history-button { width: 2.5rem; min-height: 2.25rem; padding: 0; border: 1.5px solid var(--tr-ink); border-radius: 7px; background: #fffdf3; color: var(--tr-ink); box-shadow: 2px 2px 0 #000; font: 900 1.15rem/1 sans-serif; cursor: pointer; }
+  .history-button { min-width: 3.25rem; min-height: 2.25rem; padding: .3rem .5rem; border: 1.5px solid var(--tr-ink); border-radius: 7px; background: #fffdf3; color: var(--tr-ink); box-shadow: 2px 2px 0 #000; font: 800 .72rem/1 inherit; cursor: pointer; }
   .history-button:disabled { opacity: .35; box-shadow: none; cursor: default; }
   .direction-button { min-height: 2.25rem; padding: .3rem .45rem; border: 1.5px solid var(--tr-ink); border-radius: 7px; background: #d8f8e3; color: var(--tr-ink); cursor: pointer; box-shadow: 2px 2px 0 #000; font: 800 .72rem/1 inherit; }
   .menu-button { min-height: 2.25rem; padding: .3rem .65rem; border-width: 1.5px; border-radius: 7px; background: var(--tr-yellow); color: var(--tr-ink); cursor: pointer; box-shadow: 2px 2px 0 var(--tr-ink); font-size: .76rem; }
@@ -298,9 +310,11 @@
   .player-chip.is-you { background: var(--tr-yellow); }
   .player-chip.is-viewing { outline: 2px solid var(--tr-ink); outline-offset: 2px; }
   .player-chip.is-out { opacity: .45; }
-  .player-chip.is-offline { background: #ded8bd; opacity: .65; }
+  .player-chip.is-offline { background: #ffb0a3; opacity: 1; }
   .player-chip i { width: .65rem; height: .65rem; flex: 0 0 auto; border: 1px solid var(--tr-ink); border-radius: 50%; background: var(--owner-color); }
   .player-chip b { font-size: .62rem; text-transform: uppercase; }
+  .player-disconnect-notice { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: .45rem; padding: .4rem max(.7rem, env(safe-area-inset-right)) .4rem max(.7rem, env(safe-area-inset-left)); border-bottom: 2px solid var(--tr-ink); background: #ffb0a3; color: var(--tr-ink); font-size: .78rem; font-weight: 900; text-align: center; }
+  .player-disconnect-notice[hidden] { display: none; }
   .board { position: relative; overflow: hidden; width: 100%; height: 100%; min-width: 0; min-height: 0; cursor: grab; background: #d9cba8; touch-action: none; overscroll-behavior: contain; }
   .board.is-panning { cursor: grabbing; }
   .board-layer { position: absolute; left: 50%; top: 50%; width: 4800px; height: 4800px; margin: -2400px 0 0 -2400px; transform-origin: 50% 50%; background-color: #eee4c5; background-image: radial-gradient(ellipse at center, rgba(255,251,229,.92) 0%, rgba(238,228,197,.48) 48%, rgba(196,177,132,.28) 100%), radial-gradient(circle at 22% 31%, rgba(113,91,49,.13) 0 1.2px, transparent 1.8px), radial-gradient(circle at 71% 63%, rgba(255,255,255,.52) 0 1.4px, transparent 2px), radial-gradient(circle at 43% 78%, rgba(130,101,54,.09) 0 1px, transparent 1.7px); background-size: 100% 100%, 37px 41px, 53px 47px, 61px 59px; will-change: transform; }
@@ -366,8 +380,7 @@
     .brand-mark span { width: 2.35rem; }
     .brand-mark { gap: .22rem; }
     .brand-mark span { width: clamp(2rem, 10vw, 2.45rem); }
-    .name-row { grid-template-columns: 1fr; }
-    .name-row input, .dictionary-picker select { width: 100%; font-size: 16px; }
+    .player-name-field input, .dictionary-picker select { width: 100%; font-size: 16px; }
     .lobby-card header { align-items: flex-start; }
     .lobby-nav { flex-direction: column-reverse; align-items: flex-end; }
     .lobby-card h1 { max-width: 100%; font-size: clamp(2rem, 10vw, 3rem); overflow-wrap: anywhere; }
