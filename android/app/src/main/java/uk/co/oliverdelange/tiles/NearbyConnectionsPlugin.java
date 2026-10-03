@@ -58,6 +58,8 @@ public class NearbyConnectionsPlugin extends Plugin {
     private final Map<String, java.util.function.Consumer<Boolean>> verifications = new HashMap<>();
     private final HashSet<String> outgoingConnections = new HashSet<>();
     private ConnectionsClient client;
+    private boolean advertising;
+    private boolean discovering;
 
     @Override
     public void load() {
@@ -126,30 +128,42 @@ public class NearbyConnectionsPlugin extends Plugin {
     @PluginMethod
     public void startAdvertising(PluginCall call) {
         String name = call.getString("name", "Tiles player");
-        client.stopAdvertising();
+        if (advertising) { call.resolve(); return; }
+        advertising = true;
         client.startAdvertising(name, SERVICE_ID, lifecycle,
                 new AdvertisingOptions.Builder().setStrategy(Strategy.P2P_STAR).build())
             .addOnSuccessListener(unused -> call.resolve())
-            .addOnFailureListener(error -> call.reject(error.getMessage(), error));
+            .addOnFailureListener(error -> {
+                advertising = false;
+                call.reject(error.getMessage(), error);
+            });
     }
 
     @PluginMethod
     public void stopAdvertising(PluginCall call) {
+        if (!advertising) { call.resolve(); return; }
+        advertising = false;
         client.stopAdvertising();
         call.resolve();
     }
 
     @PluginMethod
     public void startDiscovery(PluginCall call) {
-        client.stopDiscovery();
+        if (discovering) { call.resolve(); return; }
+        discovering = true;
         client.startDiscovery(SERVICE_ID, discovery,
                 new DiscoveryOptions.Builder().setStrategy(Strategy.P2P_STAR).build())
             .addOnSuccessListener(unused -> call.resolve())
-            .addOnFailureListener(error -> call.reject(error.getMessage(), error));
+            .addOnFailureListener(error -> {
+                discovering = false;
+                call.reject(error.getMessage(), error);
+            });
     }
 
     @PluginMethod
     public void stopDiscovery(PluginCall call) {
+        if (!discovering) { call.resolve(); return; }
+        discovering = false;
         client.stopDiscovery();
         call.resolve();
     }
@@ -210,6 +224,8 @@ public class NearbyConnectionsPlugin extends Plugin {
 
     @PluginMethod
     public void stop(PluginCall call) {
+        advertising = false;
+        discovering = false;
         client.stopAdvertising();
         client.stopDiscovery();
         client.stopAllEndpoints();

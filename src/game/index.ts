@@ -683,7 +683,7 @@ export function createTiles(root: HTMLElement): void {
       await NearbyConnections.setKeepAwake({ enabled: true });
       if (connectionMode === 'nearby-host') {
         await NearbyConnections.startAdvertising({ name: nearbyName });
-        if (state?.players.some(player => player.connected === false)) {
+        if (state?.phase === 'lobby' && state.players.some(player => player.connected === false)) {
           await NearbyConnections.startDiscovery({ name: nearbyName });
         }
         nearbyReconnectAttempt = 0;
@@ -959,7 +959,9 @@ export function createTiles(root: HTMLElement): void {
       }
     });
     await NearbyConnections.addListener('verificationRequired', verification => {
-      if (connectionMode === 'nearby-host' && outgoingNearbyInvites.has(verification.endpointId)) {
+      const returningPlayer = connectionMode === 'nearby-host'
+        && state?.players.some(player => player.connected === false);
+      if (connectionMode === 'nearby-host' && (outgoingNearbyInvites.has(verification.endpointId) || returningPlayer)) {
         const invite = nearbyInviteStates.get(verification.endpointId);
         if (invite) invite.status = 'received';
         if (state) {
@@ -986,6 +988,7 @@ export function createTiles(root: HTMLElement): void {
           renderLobbyRoster(state);
           renderPlayerDisconnect(state);
         }
+        if (state?.phase !== 'lobby' || outgoingNearbyInvites.size === 0) void NearbyConnections.stopDiscovery();
         nearbyReconnectAttempt = 0;
         nearbyStatus.textContent = `${endpoint.name} connected.`;
         return;
@@ -1004,6 +1007,8 @@ export function createTiles(root: HTMLElement): void {
       nearbyConnectingId = null;
       nearbyHostId = endpoint.endpointId;
       nearbyHostName = endpoint.name;
+      void NearbyConnections.stopAdvertising();
+      void NearbyConnections.stopDiscovery();
       enterNearbyGuest(endpoint);
     });
     await NearbyConnections.addListener('disconnected', endpoint => {
@@ -2255,7 +2260,8 @@ export function createTiles(root: HTMLElement): void {
     flushChatReadReceipts();
     if (connectionMode === 'nearby-home') {
       void startNearbyHome();
-    } else if (connectionMode === 'nearby-host' || (connectionMode === 'nearby-join' && !nearbyHostId)) {
+    } else if ((connectionMode === 'nearby-host' && state?.players.some(player => player.connected === false))
+      || (connectionMode === 'nearby-join' && !nearbyHostId)) {
       clearNearbyReconnectTimer();
       void resumeNearbyTransport();
     }

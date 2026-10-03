@@ -33,6 +33,8 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
     private var endpointNames: [EndpointID: String] = [:]
     private var verifications: [EndpointID: (Bool) -> Void] = [:]
     private var localName = "Tiles player"
+    private var isAdvertising = false
+    private var isDiscovering = false
 
     @objc public func isAvailable(_ call: CAPPluginCall) { call.resolve(["available": true]) }
 
@@ -56,40 +58,46 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc public func startAdvertising(_ call: CAPPluginCall) {
         localName = call.getString("name") ?? localName
+        if isAdvertising { call.resolve(); return }
         let value: Advertiser
         if let current = advertiser {
-            current.stopAdvertising()
             value = current
         } else {
             value = Advertiser(connectionManager: manager ?? configure())
             value.delegate = self
             advertiser = value
         }
+        isAdvertising = true
         value.startAdvertising(using: Data(localName.utf8))
         call.resolve()
     }
 
     @objc public func stopAdvertising(_ call: CAPPluginCall) {
+        if !isAdvertising { call.resolve(); return }
+        isAdvertising = false
         advertiser?.stopAdvertising()
         call.resolve()
     }
 
     @objc public func startDiscovery(_ call: CAPPluginCall) {
         localName = call.getString("name") ?? localName
+        if isDiscovering { call.resolve(); return }
         let value: Discoverer
         if let current = discoverer {
-            current.stopDiscovery()
             value = current
         } else {
             value = Discoverer(connectionManager: manager ?? configure())
             value.delegate = self
             discoverer = value
         }
+        isDiscovering = true
         value.startDiscovery()
         call.resolve()
     }
 
     @objc public func stopDiscovery(_ call: CAPPluginCall) {
+        if !isDiscovering { call.resolve(); return }
+        isDiscovering = false
         discoverer?.stopDiscovery()
         call.resolve()
     }
@@ -132,6 +140,8 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc public func stop(_ call: CAPPluginCall) {
+        isAdvertising = false
+        isDiscovering = false
         advertiser?.stopAdvertising()
         discoverer?.stopDiscovery()
         advertiser = nil
