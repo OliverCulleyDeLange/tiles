@@ -7,6 +7,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
   <meta name="description" content="A real-time crossword tile race for two to eight players." />
   <meta name="theme-color" content="#ffd51f" />
+  <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+  <link rel="manifest" href="./manifest.webmanifest" />
   <title>Tiles</title>
 </head>
 <body class="standalone-page">
@@ -28,10 +31,10 @@
         <p>Invite players around you directly over Bluetooth and Wi-Fi.</p>
         <strong class="nearby-label">Local players</strong>
         <div class="nearby-endpoints" data-nearby-endpoints>
-          <p>Searching for players…</p>
+          <div class="nearby-search"><span aria-hidden="true">…</span><p>Searching nearby…</p></div>
         </div>
-        <button type="button" class="nearby-start" data-nearby-start disabled>Start local game</button>
-        <small data-nearby-status>Nearby players are selected automatically. Tap one to exclude them.</small>
+        <button type="button" class="nearby-start" data-nearby-start hidden>Request game</button>
+        <small data-nearby-status hidden></small>
       </div>
       <section class="saved-games" data-saved-games hidden>
         <p class="eyebrow">Saved on this device</p>
@@ -198,15 +201,19 @@
   .room-note, .lobby-help { margin: 1rem 0 0; color: #6b6044; font-size: .88rem; }
   .nearby-label { display: block; margin-bottom: .55rem; font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; }
   .nearby-entry small { display: block; margin-top: .55rem; color: #6b6044; font-size: .74rem; line-height: 1.35; }
+  .nearby-entry small[hidden], .nearby-start[hidden] { display: none; }
   .nearby-entry button { min-height: 2.8rem; border: 2px solid var(--tr-ink); border-radius: 9px; color: var(--tr-ink); box-shadow: 2px 2px 0 var(--tr-ink); font-weight: 800; cursor: pointer; }
   .nearby-entry button:disabled { opacity: .5; box-shadow: none; cursor: default; }
   .nearby-start { width: 100%; margin-top: .65rem; background: var(--tr-yellow); }
-  .nearby-endpoints { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: .5rem; }
-  .nearby-endpoints p { grid-column: 1 / -1; margin: .25rem 0; color: #6b6044; font-size: .82rem; }
-  .nearby-endpoints button { display: grid; place-items: center; gap: .3rem; padding: .65rem .4rem; background: #fff; }
-  .nearby-endpoints button::before { content: ''; width: 2.4rem; height: 2.4rem; border: 2px solid var(--tr-ink); border-radius: 50%; background: #ded8bd; }
-  .nearby-endpoints button.is-selected { background: #fff6bf; }
-  .nearby-endpoints button.is-selected::before { background: #55cf83; box-shadow: inset 0 0 0 6px #d8f8e3; }
+  .nearby-endpoints { display: flex; flex-wrap: wrap; gap: .5rem; }
+  .nearby-player { display: inline-flex; width: fit-content; max-width: 100%; align-items: center; gap: .55rem; min-height: 2.8rem; padding: .65rem .75rem; border: 2px solid var(--tr-ink); border-radius: 9px; background: #fff; box-shadow: 2px 2px 0 var(--tr-ink); font-weight: 800; cursor: pointer; }
+  .nearby-player:has(input:checked) { background: #fff6bf; }
+  .nearby-player input { width: 1.25rem; height: 1.25rem; flex: 0 0 auto; margin: 0; accent-color: #19734b; }
+  .nearby-player span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nearby-search { display: grid; width: 100%; justify-items: center; gap: .65rem; padding: 1rem 0 .35rem; color: #6b6044; }
+  .nearby-search span { display: grid; place-items: center; width: 3rem; aspect-ratio: 1; border: 2px solid var(--tr-ink); border-radius: 7px; background: var(--tr-yellow); color: var(--tr-ink); box-shadow: 3px 3px 0 var(--tr-ink); font: 900 1.6rem/1 Georgia, serif; animation: nearby-tile-spin 1.4s cubic-bezier(.55,.1,.45,.9) infinite; }
+  .nearby-search p { margin: 0; font-size: .82rem; font-weight: 700; }
+  @keyframes nearby-tile-spin { 0% { transform: rotate(0deg); } 50% { transform: rotate(180deg) scale(1.08); } 100% { transform: rotate(360deg); } }
   .lobby-card header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
   .lobby-card header > div { min-width: 0; }
   .lobby-card h1 { font-size: clamp(2.3rem, 7vw, 4rem); }
@@ -218,7 +225,11 @@
   .roster li.is-loading { color: #6b6044; }
   .roster li.is-loading::before { content: ''; width: 1rem; height: 1rem; flex: 0 0 auto; border: 2px solid #b4aa88; border-top-color: var(--tr-ink); border-radius: 50%; animation: button-spin .7s linear infinite; }
   .roster em { margin-left: auto; font-size: .75rem; font-style: normal; text-transform: uppercase; }
+  .invite-state { padding: .25rem .45rem; border-radius: 999px; background: #e8e1c8; color: #5f5845; }
+  .invite-state.received { background: #d7eaff; color: #24527d; }
+  .invite-state.accepted { background: #d8f8e3; color: #17613d; }
   .presence { width: .7rem; height: .7rem; border-radius: 50%; background: #2bb36c; box-shadow: 0 0 0 3px #ccf4dd; }
+  .presence.invite-pending { background: #d0a900; box-shadow: 0 0 0 3px #fff1a5; }
   .presence.is-offline { background: #99917a; box-shadow: 0 0 0 3px #e4deca; }
   .dictionary-picker { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: .75rem; margin: 0 0 1rem; padding: .7rem; border: 2px solid var(--tr-ink); border-radius: 10px; background: #fff; }
   .dictionary-picker span { font-weight: 800; }

@@ -105,7 +105,6 @@ export function createTiles(root: HTMLElement): void {
   const inviteName = root.querySelector<HTMLElement>('[data-invite-name]')!;
   const inviteAccept = root.querySelector<HTMLButtonElement>('[data-invite-accept]')!;
   const inviteDecline = root.querySelector<HTMLButtonElement>('[data-invite-decline]')!;
-  const updateNotice = root.querySelector<HTMLElement>('[data-update-notice]')!;
   const updateNow = root.querySelector<HTMLButtonElement>('[data-update-now]')!;
   const connectionNotice = root.querySelector<HTMLElement>('[data-connection-notice]')!;
   const connectionMessage = root.querySelector<HTMLElement>('[data-connection-message]')!;
@@ -143,6 +142,7 @@ export function createTiles(root: HTMLElement): void {
   let nearbyPermissionAliases: string[] | undefined;
   const selectedNearbyIds = new Set<string>();
   const outgoingNearbyInvites = new Set<string>();
+  const nearbyInviteStates = new Map<string, { name: string; status: 'requested' | 'received' | 'accepted' }>();
   let nearbyHomeStarting = false;
   let pendingNearbyInvite: NearbyVerification | null = null;
   let transportSend: ((message: object) => void) | null = null;
@@ -608,6 +608,22 @@ export function createTiles(root: HTMLElement): void {
   async function requestNearbyPermissions(): Promise<void> {
     if (Capacitor.getPlatform() === 'android') await NearbyConnections.ensurePermissions();
     else await NearbyConnections.requestPermissions(nearbyPermissionAliases?.length ? { permissions: nearbyPermissionAliases } : undefined);
+    await NearbyConnections.requestNotificationPermission().catch(() => undefined);
+  }
+
+  function renderLobbyRoster(room: RoomSnapshot): void {
+    const playerNames = new Set(room.players.map(player => player.name.trim().toLocaleLowerCase()));
+    const playerRows = room.players.map(player => {
+      const localAccepted = connectionMode === 'nearby-host' && player.id !== room.hostId && player.connected !== false;
+      const status = player.connected === false ? 'Reconnecting' : player.id === room.hostId ? 'Host' : localAccepted ? 'Accepted' : '';
+      return `<li><span class="presence ${player.connected === false ? 'is-offline' : ''}" aria-hidden="true"></span><strong>${escapeHtml(player.name)}</strong>${status ? `<em class="invite-state ${status.toLowerCase()}">${status}</em>` : ''}</li>`;
+    });
+    const inviteRows = connectionMode === 'nearby-host'
+      ? [...nearbyInviteStates.values()]
+        .filter(invite => !playerNames.has(invite.name.trim().toLocaleLowerCase()))
+        .map(invite => `<li><span class="presence invite-pending" aria-hidden="true"></span><strong>${escapeHtml(invite.name)}</strong><em class="invite-state ${invite.status}">${invite.status}</em></li>`)
+      : [];
+    roster.innerHTML = [...playerRows, ...inviteRows].join('');
   }
 
   function renderNearbyEndpoints(): void {
@@ -617,28 +633,33 @@ export function createTiles(root: HTMLElement): void {
       const normalizedName = endpoint.name.trim().toLocaleLowerCase();
       if (renderedNames.has(normalizedName)) continue;
       renderedNames.add(normalizedName);
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.textContent = `${endpoint.name}'s game`;
-      button.classList.toggle('is-selected', selectedNearbyIds.has(endpoint.endpointId));
-      button.setAttribute('aria-pressed', String(selectedNearbyIds.has(endpoint.endpointId)));
-      button.addEventListener('click', () => {
-        if (selectedNearbyIds.has(endpoint.endpointId)) selectedNearbyIds.delete(endpoint.endpointId);
-        else selectedNearbyIds.add(endpoint.endpointId);
+      const label = document.createElement('label');
+      label.className = 'nearby-player';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = selectedNearbyIds.has(endpoint.endpointId);
+      const text = document.createElement('span');
+      text.textContent = endpoint.name;
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked) selectedNearbyIds.add(endpoint.endpointId);
+        else selectedNearbyIds.delete(endpoint.endpointId);
         renderNearbyEndpoints();
       });
-      nearbyEndpoints.append(button);
+      label.append(checkbox, text);
+      nearbyEndpoints.append(label);
     }
     if (!nearbyEndpointMap.size) {
-      const empty = document.createElement('p');
-      empty.textContent = nearbyHomeStarting ? 'Starting nearby discovery…' : 'Searching for players…';
-      nearbyEndpoints.append(empty);
+      const searching = document.createElement('div');
+      searching.className = 'nearby-search';
+      searching.innerHTML = `<span aria-hidden="true">…</span><p>${nearbyHomeStarting ? 'Starting nearby discovery…' : 'Searching nearby…'}</p>`;
+      nearbyEndpoints.append(searching);
     }
+    nearbyStartButton.hidden = selectedNearbyIds.size === 0;
     if (nearbyStartButton.getAttribute('aria-busy') !== 'true') {
       nearbyStartButton.disabled = selectedNearbyIds.size === 0 || nearbyHomeStarting;
       nearbyStartButton.textContent = selectedNearbyIds.size
-        ? `Start local game · ${selectedNearbyIds.size + 1} players`
-        : 'Start local game';
+        ? `Request game · ${selectedNearbyIds.size} ${selectedNearbyIds.size === 1 ? 'player' : 'players'}`
+        : 'Request game';
     }
   }
 
@@ -696,7 +717,7 @@ export function createTiles(root: HTMLElement): void {
       await requestNearbyPermissions();
       await NearbyConnections.startAdvertising({ name });
       await NearbyConnections.startDiscovery({ name });
-      nearbyStatus.textContent = 'Nearby players are selected automatically. Tap one to exclude them.';
+      nearbyStatus.textContent = '';
     } catch {
       connectionMode = null;
       nearbyStatus.textContent = 'Allow nearby-device access to find local players.';
@@ -759,8 +780,14 @@ export function createTiles(root: HTMLElement): void {
       renderNearbyEndpoints();
     });
     await NearbyConnections.addListener('verificationRequired', verification => {
-      if ((connectionMode === 'nearby-host' && outgoingNearbyInvites.has(verification.endpointId))
-        || connectionMode === 'nearby-join') {
+      if (connectionMode === 'nearby-host' && outgoingNearbyInvites.has(verification.endpointId)) {
+        const invite = nearbyInviteStates.get(verification.endpointId);
+        if (invite) invite.status = 'received';
+        if (state) renderLobbyRoster(state);
+        void NearbyConnections.acceptVerification({ endpointId: verification.endpointId, accept: true });
+        return;
+      }
+      if (connectionMode === 'nearby-join') {
         void NearbyConnections.acceptVerification({ endpointId: verification.endpointId, accept: true });
         return;
       }
@@ -770,6 +797,9 @@ export function createTiles(root: HTMLElement): void {
     await NearbyConnections.addListener('connected', endpoint => {
       connectionRestored();
       if (localHost) {
+        const invite = nearbyInviteStates.get(endpoint.endpointId);
+        if (invite) invite.status = 'accepted';
+        if (state) renderLobbyRoster(state);
         outgoingNearbyInvites.delete(endpoint.endpointId);
         nearbyReconnectAttempt = 0;
         nearbyStatus.textContent = `${endpoint.name} connected.`;
@@ -840,12 +870,22 @@ export function createTiles(root: HTMLElement): void {
         else sendNearby(peerId, message);
       }, saveLocalGame, restored);
       transportSend = message => localHost?.receive(localPeerId, message as ClientMessage);
+      outgoingNearbyInvites.clear();
+      nearbyInviteStates.clear();
+      for (const endpointId of inviteIds) {
+        outgoingNearbyInvites.add(endpointId);
+        nearbyInviteStates.set(endpointId, {
+          name: nearbyEndpointMap.get(endpointId)?.name ?? 'Nearby player',
+          status: 'requested',
+        });
+      }
       const resumeToken = restored ? localStorage.getItem(sessionKey()) ?? undefined : undefined;
       localHost.receive(localPeerId, { t: 'hello', v: PROTOCOL_VERSION, name, resumeToken });
-      outgoingNearbyInvites.clear();
-      inviteIds.forEach(endpointId => outgoingNearbyInvites.add(endpointId));
       for (const endpointId of inviteIds) {
         void NearbyConnections.requestConnection({ endpointId, name }).catch(() => {
+          nearbyInviteStates.delete(endpointId);
+          outgoingNearbyInvites.delete(endpointId);
+          if (state) renderLobbyRoster(state);
           show('One nearby player could not be invited.', 'bad');
         });
       }
@@ -861,7 +901,7 @@ export function createTiles(root: HTMLElement): void {
     if (!name) return;
     const inviteIds = [...selectedNearbyIds];
     if (!inviteIds.length) return;
-    setButtonLoading(nearbyStartButton, true, 'Sending invites…');
+    setButtonLoading(nearbyStartButton, true, 'Requesting…');
     await startNearbyHost(name, undefined, inviteIds);
   }
 
@@ -892,9 +932,7 @@ export function createTiles(root: HTMLElement): void {
     rememberGame(next);
     bunch.textContent = String(next.bunch);
     peel.textContent = String(next.peel);
-    roster.innerHTML = next.players.map(player =>
-      `<li><span class="presence ${player.connected === false ? 'is-offline' : ''}" aria-hidden="true"></span><strong>${escapeHtml(player.name)}</strong>${player.connected === false ? '<em>Reconnecting</em>' : player.id === next.hostId ? '<em>Host</em>' : ''}</li>`
-    ).join('');
+    renderLobbyRoster(next);
     players.innerHTML = next.players.map((player, index) =>
       `<li><span class="player-chip ${player.id === myId ? 'is-you' : ''} ${player.eliminated ? 'is-out' : ''} ${player.connected === false ? 'is-offline' : ''}" style="--owner-color:${ownerColor(index)}"><i></i><span>${escapeHtml(player.name)}</span><b>${player.connected === false ? 'OFFLINE' : player.eliminated ? 'OUT' : `${player.tilesLeft} loose`}</b></span></li>`
     ).join('');
@@ -1765,6 +1803,8 @@ export function createTiles(root: HTMLElement): void {
     clearNearbyHelloTimer();
     transportSend = null;
     localHost = null;
+    nearbyInviteStates.clear();
+    outgoingNearbyInvites.clear();
     nearbyHostId = null;
     nearbyHostName = '';
     nearbyAutoReconnect = false;
@@ -1829,24 +1869,16 @@ export function createTiles(root: HTMLElement): void {
 
   function initializeUpdates(): void {
     if (!('serviceWorker' in navigator)) return;
-    let hadController = navigator.serviceWorker.controller != null;
+    const scopeUrl = new URL(import.meta.env.BASE_URL, location.origin);
+    if (!scopeUrl.pathname.endsWith('/')) scopeUrl.pathname += '/';
+    const workerUrl = new URL('sw.js', scopeUrl);
+    let registration: ServiceWorkerRegistration | null = null;
+    let reloading = false;
 
-    const showUpdate = (): void => {
-      updateNotice.hidden = false;
-    };
-    const checkForUpdate = (): void => {
-      navigator.serviceWorker.controller?.postMessage({ type: 'odl-check-page', url: location.href });
-    };
-
-    navigator.serviceWorker.addEventListener('message', event => {
-      const message = event.data as { type?: unknown; url?: unknown } | null;
-      if (message?.type !== 'odl-page-update-ready' || typeof message.url !== 'string') return;
-      const updated = new URL(message.url, location.origin);
-      if (updated.origin === location.origin && updated.pathname === location.pathname) showUpdate();
-    });
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (hadController) showUpdate();
-      hadController = true;
+      if (reloading) return;
+      reloading = true;
+      location.reload();
     });
     updateNow.addEventListener('click', () => {
       updateNow.disabled = true;
@@ -1854,18 +1886,18 @@ export function createTiles(root: HTMLElement): void {
       location.reload();
     });
 
-    void navigator.serviceWorker.register('/sw.js').then(registration => {
-      void registration.update();
-      window.setTimeout(checkForUpdate, 1_000);
-      window.setInterval(() => {
-        void registration.update();
-        checkForUpdate();
-      }, 60_000);
+    void navigator.serviceWorker.register(workerUrl, {
+      scope: scopeUrl.pathname,
+      updateViaCache: 'none',
+    }).then(nextRegistration => {
+      registration = nextRegistration;
+      void nextRegistration.update();
+      window.setInterval(() => void nextRegistration.update(), 60_000);
     }).catch(() => {});
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') checkForUpdate();
+      if (document.visibilityState === 'visible') void registration?.update();
     });
-    window.addEventListener('focus', checkForUpdate);
+    window.addEventListener('focus', () => void registration?.update());
   }
 }
 

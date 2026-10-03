@@ -1,6 +1,11 @@
 package uk.co.oliverdelange.tiles;
 
 import android.Manifest;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.Context;
+import android.content.Intent;
 import android.os.Build;
 import android.view.WindowManager;
 
@@ -30,6 +35,7 @@ import com.google.android.gms.nearby.connection.Strategy;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 
@@ -42,13 +48,15 @@ import java.util.Map;
             Manifest.permission.BLUETOOTH_CONNECT,
             Manifest.permission.BLUETOOTH_SCAN
         }),
-        @Permission(alias = "wifi", strings = { Manifest.permission.NEARBY_WIFI_DEVICES })
+        @Permission(alias = "wifi", strings = { Manifest.permission.NEARBY_WIFI_DEVICES }),
+        @Permission(alias = "notifications", strings = { Manifest.permission.POST_NOTIFICATIONS })
     }
 )
 public class NearbyConnectionsPlugin extends Plugin {
     private static final String SERVICE_ID = "uk.co.oliverdelange.tiles.nearby";
     private final Map<String, String> endpointNames = new HashMap<>();
     private final Map<String, java.util.function.Consumer<Boolean>> verifications = new HashMap<>();
+    private final HashSet<String> outgoingConnections = new HashSet<>();
     private ConnectionsClient client;
 
     @Override
@@ -96,6 +104,18 @@ public class NearbyConnectionsPlugin extends Plugin {
         }
         call.resolve();
     }
+
+    @PluginMethod
+    public void requestNotificationPermission(PluginCall call) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || getPermissionState("notifications") == PermissionState.GRANTED) {
+            call.resolve();
+            return;
+        }
+        requestPermissionForAliases(new String[] { "notifications" }, call, "notificationPermissionResult");
+    }
+
+    @PermissionCallback
+    public void notificationPermissionResult(PluginCall call) { call.resolve(); }
 
     private String[] permissionAliases() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) return new String[] { "bluetooth", "wifi" };
@@ -150,9 +170,13 @@ public class NearbyConnectionsPlugin extends Plugin {
         String endpointId = call.getString("endpointId");
         String name = call.getString("name", "Tiles player");
         if (endpointId == null) { call.reject("endpointId is required"); return; }
+        outgoingConnections.add(endpointId);
         client.requestConnection(name, endpointId, lifecycle)
             .addOnSuccessListener(unused -> call.resolve())
-            .addOnFailureListener(error -> call.reject(error.getMessage(), error));
+            .addOnFailureListener(error -> {
+                outgoingConnections.remove(endpointId);
+                call.reject(error.getMessage(), error);
+            });
     }
 
     @PluginMethod
@@ -160,6 +184,7 @@ public class NearbyConnectionsPlugin extends Plugin {
         String endpointId = call.getString("endpointId");
         boolean accept = Boolean.TRUE.equals(call.getBoolean("accept"));
         if (endpointId == null || !verifications.containsKey(endpointId)) { call.reject("No pending verification"); return; }
+        ((NotificationManager) getContext().getSystemService(Context.NOTIFICATION_SERVICE)).cancel(endpointId.hashCode());
         verifications.remove(endpointId).accept(accept);
         call.resolve();
     }
@@ -200,6 +225,25 @@ public class NearbyConnectionsPlugin extends Plugin {
         return value;
     }
 
+    private void showInviteNotification(String id, String name) {
+        NotificationManager notifications = (NotificationManager) getContext().getSystemService(Context.NOTIFICATION_SERVICE);
+        String channelId = "tiles_game_invites";
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            notifications.createNotificationChannel(new NotificationChannel(channelId, "Game invitations", NotificationManager.IMPORTANCE_HIGH));
+        }
+        Intent launch = getContext().getPackageManager().getLaunchIntentForPackage(getContext().getPackageName());
+        PendingIntent pending = PendingIntent.getActivity(getContext(), id.hashCode(), launch, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        android.app.Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+            ? new android.app.Notification.Builder(getContext(), channelId)
+            : new android.app.Notification.Builder(getContext());
+        builder.setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("Tiles game invitation")
+            .setContentText(name + " invited you to play")
+            .setContentIntent(pending)
+            .setAutoCancel(true);
+        notifications.notify(id.hashCode(), builder.build());
+    }
+
     private final EndpointDiscoveryCallback discovery = new EndpointDiscoveryCallback() {
         @Override public void onEndpointFound(String id, DiscoveredEndpointInfo info) {
             endpointNames.put(id, info.getEndpointName());
@@ -211,6 +255,7 @@ public class NearbyConnectionsPlugin extends Plugin {
     private final ConnectionLifecycleCallback lifecycle = new ConnectionLifecycleCallback() {
         @Override public void onConnectionInitiated(String id, ConnectionInfo info) {
             endpointNames.put(id, info.getEndpointName());
+            if (!outgoingConnections.contains(id)) showInviteNotification(id, info.getEndpointName());
             JSObject value = endpoint(id);
             String code = info.getAuthenticationToken();
             value.put("code", code == null || code.isEmpty() ? info.getAuthenticationDigits() : code);
@@ -221,6 +266,7 @@ public class NearbyConnectionsPlugin extends Plugin {
             notifyListeners("verificationRequired", value);
         }
         @Override public void onConnectionResult(String id, ConnectionResolution resolution) {
+            outgoingConnections.remove(id);
             if (resolution.getStatus().isSuccess()) notifyListeners("connected", endpoint(id));
             else notifyListeners("disconnected", endpoint(id));
         }

@@ -7,6 +7,7 @@ export interface NearbyPayload { endpointId: string; payload: string }
 interface NearbyConnectionsPlugin {
   isAvailable(): Promise<{ available: boolean; permissionAliases?: string[] }>;
   requestPermissions(options?: { permissions?: string[] }): Promise<Record<string, string>>;
+  requestNotificationPermission(): Promise<void>;
   ensurePermissions(): Promise<void>;
   startAdvertising(options: { name: string }): Promise<void>;
   stopAdvertising(): Promise<void>;

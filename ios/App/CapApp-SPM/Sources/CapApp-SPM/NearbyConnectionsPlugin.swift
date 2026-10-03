@@ -3,6 +3,7 @@ import CoreLocation
 import Foundation
 import NearbyConnections
 import UIKit
+import UserNotifications
 
 @objc(NearbyConnectionsPlugin)
 public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
@@ -11,6 +12,7 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "isAvailable", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "requestPermissions", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "requestNotificationPermission", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startAdvertising", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopAdvertising", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startDiscovery", returnType: CAPPluginReturnPromise),
@@ -37,6 +39,12 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc public override func requestPermissions(_ call: CAPPluginCall) {
         locationManager.requestWhenInUseAuthorization()
         call.resolve(["nearby": "prompted"])
+    }
+
+    @objc public func requestNotificationPermission(_ call: CAPPluginCall) {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in
+            call.resolve()
+        }
     }
 
     private func configure() -> ConnectionManager {
@@ -104,6 +112,8 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
         guard let endpointID = call.getString("endpointId"), let handler = verifications.removeValue(forKey: endpointID) else {
             call.reject("No pending verification"); return
         }
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["invite-\(endpointID)"])
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["invite-\(endpointID)"])
         handler(call.getBool("accept") ?? false)
         call.resolve()
     }
@@ -149,6 +159,11 @@ extension NearbyConnectionsPlugin: DiscovererDelegate {
 extension NearbyConnectionsPlugin: AdvertiserDelegate {
     public func advertiser(_ advertiser: Advertiser, didReceiveConnectionRequestFrom endpointID: EndpointID, with context: Data, connectionRequestHandler: @escaping (Bool) -> Void) {
         endpointNames[endpointID] = String(data: context, encoding: .utf8) ?? "Nearby player"
+        let content = UNMutableNotificationContent()
+        content.title = "Tiles game invitation"
+        content.body = "\(endpointNames[endpointID] ?? "A nearby player") invited you to play"
+        content.sound = .default
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "invite-\(endpointID)", content: content, trigger: nil))
         connectionRequestHandler(true)
     }
 }
