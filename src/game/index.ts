@@ -48,6 +48,7 @@ interface SavedGame {
   playerNames: string[];
   updatedAt: number;
 }
+interface PendingChatMessage { text: string; attempts: number; timer: number | null }
 
 const SAVED_GAMES_KEY = 'tiles-saved-games-v1';
 const LOCAL_GAME_KEY = 'tiles-local-game-v1';
@@ -190,11 +191,15 @@ export function createTiles(root: HTMLElement): void {
   const pointers = new Map<number, Point>();
   let gesture: Gesture | null = null;
   let nativeGesture: { camera: Camera; x: number; y: number } | null = null;
+  let lastCanvasTap: { x: number; y: number; at: number } | null = null;
+  let canvasPress: { pointerId: number; x: number; y: number; moved: boolean } | null = null;
+  let marquee: { pointerId: number; start: Point; current: Point; element: HTMLElement } | null = null;
   let autoFillDirection: 'right' | 'down' = 'right';
   let viewingPlayerId: string | null = null;
   const undoStack: EditSnapshot[] = [];
   const redoStack: EditSnapshot[] = [];
   const unreadChatMessages = new Map<string, string>();
+  const pendingChatMessages = new Map<string, PendingChatMessage>();
   let toastTimer: number | null = null;
 
   function readSavedGames(): SavedGame[] {
@@ -361,21 +366,78 @@ export function createTiles(root: HTMLElement): void {
     return document.visibilityState === 'visible' && state?.phase === 'lobby' && !lobby.hidden;
   }
 
-  function updateChatReceipt(messageId: string, status: 'sent' | 'received' | 'read'): void {
+  function updateChatReceipt(messageId: string, status: 'sent' | 'received' | 'read' | 'not-delivered'): void {
     const receipt = Array.from(chatLog.querySelectorAll<HTMLElement>('[data-chat-receipt]'))
       .find(candidate => candidate.dataset.chatReceipt === messageId);
     if (!receipt) return;
-    const rank = { sent: 0, received: 1, read: 2 } as const;
+    const rank = { 'not-delivered': -1, sent: 0, received: 1, read: 2 } as const;
     const current = receipt.dataset.status as keyof typeof rank | undefined;
-    if (current && rank[current] >= rank[status]) return;
+    if (status === 'not-delivered' && current !== 'sent' && current !== 'not-delivered') return;
+    if (status !== 'not-delivered' && current && rank[current] >= rank[status]) return;
     receipt.dataset.status = status;
-    receipt.textContent = status[0].toUpperCase() + status.slice(1);
+    receipt.textContent = status === 'not-delivered' ? 'Not delivered' : status[0].toUpperCase() + status.slice(1);
+  }
+
+  function transmitPendingChat(messageId: string): void {
+    const pending = pendingChatMessages.get(messageId);
+    if (!pending || state?.phase !== 'lobby') return;
+    send({ t: 'chat', id: messageId, text: pending.text });
+    pending.attempts++;
+    if (pending.timer != null) window.clearTimeout(pending.timer);
+    const hasRecipient = state.players.some(player => player.id !== myId && player.connected !== false);
+    if (!hasRecipient) {
+      pending.timer = null;
+      return;
+    }
+    const delay = Math.min(4_000, 1_200 * 2 ** Math.max(0, pending.attempts - 1));
+    pending.timer = window.setTimeout(() => {
+      pending.timer = null;
+      if (!pendingChatMessages.has(messageId)) return;
+      if (pending.attempts < 4) transmitPendingChat(messageId);
+      else updateChatReceipt(messageId, 'not-delivered');
+    }, delay);
+  }
+
+  function settlePendingChat(messageId: string): void {
+    const pending = pendingChatMessages.get(messageId);
+    if (pending?.timer != null) window.clearTimeout(pending.timer);
+    pendingChatMessages.delete(messageId);
+  }
+
+  function emitChatReceipt(
+    messageId: string,
+    senderId: string,
+    status: 'received' | 'read',
+    retryDelays: number[],
+  ): void {
+    const receipt = { t: 'chat-receipt', messageId, senderId, status } as const;
+    send(receipt);
+    for (const delay of retryDelays) {
+      window.setTimeout(() => {
+        if (state?.phase === 'lobby') send(receipt);
+      }, delay);
+    }
+  }
+
+  function resumePendingChats(): void {
+    for (const [messageId, pending] of pendingChatMessages) {
+      if (pending.timer != null) continue;
+      pending.attempts = 0;
+      updateChatReceipt(messageId, 'sent');
+      transmitPendingChat(messageId);
+    }
+  }
+
+  function acknowledgeIncomingChat(messageId: string, senderId: string): void {
+    unreadChatMessages.set(messageId, senderId);
+    emitChatReceipt(messageId, senderId, 'received', [500]);
+    window.setTimeout(() => sendChatRead(messageId, senderId), 250);
   }
 
   function sendChatRead(messageId: string, senderId: string): void {
     if (!chatIsReadable() || !unreadChatMessages.has(messageId)) return;
     unreadChatMessages.delete(messageId);
-    send({ t: 'chat-receipt', messageId, senderId, status: 'read' });
+    emitChatReceipt(messageId, senderId, 'read', [700, 1_800]);
   }
 
   function flushChatReadReceipts(): void {
@@ -387,6 +449,7 @@ export function createTiles(root: HTMLElement): void {
     root.dataset.connection = 'online';
     connectionNotice.hidden = true;
     setButtonLoading(retryConnection, false);
+    resumePendingChats();
   }
 
   function connectionLost(message: string): void {
@@ -479,8 +542,12 @@ export function createTiles(root: HTMLElement): void {
     }
     else if (message.t === 'chat') {
       const messageId = message.id || crypto.randomUUID();
-      if (Array.from(chatLog.querySelectorAll<HTMLElement>('[data-message-id]'))
-        .some(candidate => candidate.dataset.messageId === messageId)) return;
+      const duplicate = Array.from(chatLog.querySelectorAll<HTMLElement>('[data-message-id]'))
+        .some(candidate => candidate.dataset.messageId === messageId);
+      if (duplicate) {
+        if (message.playerId !== myId) acknowledgeIncomingChat(messageId, message.playerId);
+        return;
+      }
       const empty = chatLog.querySelector('[data-chat-empty]');
       empty?.remove();
       const row = document.createElement('div');
@@ -505,14 +572,16 @@ export function createTiles(root: HTMLElement): void {
       chatLog.append(row);
       while (chatLog.children.length > 60) chatLog.firstElementChild?.remove();
       chatLog.scrollTop = chatLog.scrollHeight;
-      if (message.playerId === myId) setButtonLoading(chatSend, false);
-      else {
-        unreadChatMessages.set(messageId, message.playerId);
-        send({ t: 'chat-receipt', messageId, senderId: message.playerId, status: 'received' });
-        window.setTimeout(() => sendChatRead(messageId, message.playerId), 250);
+      if (message.playerId === myId) {
+        setButtonLoading(chatSend, false);
+        if (!state?.players.some(player => player.id !== myId && player.connected !== false)) settlePendingChat(messageId);
       }
+      else acknowledgeIncomingChat(messageId, message.playerId);
     }
-    else if (message.t === 'chat-receipt') updateChatReceipt(message.messageId, message.status);
+    else if (message.t === 'chat-receipt') {
+      settlePendingChat(message.messageId);
+      updateChatReceipt(message.messageId, message.status);
+    }
     else if (message.t === 'new-game') {
       resetGameState();
       renderTiles();
@@ -1961,11 +2030,69 @@ export function createTiles(root: HTMLElement): void {
     }
     pointers.clear();
     gesture = null;
+    canvasPress = null;
+    lastCanvasTap = null;
     board.classList.remove('is-panning');
+  }
+
+  function finishMarquee(clear = false): void {
+    if (!marquee) return;
+    try {
+      if (board.hasPointerCapture(marquee.pointerId)) board.releasePointerCapture(marquee.pointerId);
+    } catch {}
+    marquee.element.remove();
+    marquee = null;
+    board.classList.remove('is-selecting');
+    if (clear) clearSelection();
+    else {
+      selectedId = [...selectedIds].at(-1) ?? null;
+      dump.disabled = !selectedId || (state?.bunch ?? 0) < 3 || state?.phase !== 'playing';
+    }
+  }
+
+  function beginMarquee(event: PointerEvent): void {
+    clearSelection();
+    const element = document.createElement('div');
+    element.className = 'selection-marquee';
+    board.append(element);
+    marquee = {
+      pointerId: event.pointerId,
+      start: { x: event.clientX, y: event.clientY },
+      current: { x: event.clientX, y: event.clientY },
+      element,
+    };
+    board.setPointerCapture(event.pointerId);
+    board.classList.add('is-selecting');
+  }
+
+  function updateMarquee(event: PointerEvent): void {
+    if (!marquee || marquee.pointerId !== event.pointerId) return;
+    marquee.current = { x: event.clientX, y: event.clientY };
+    const boardRect = board.getBoundingClientRect();
+    const left = Math.max(boardRect.left, Math.min(marquee.start.x, marquee.current.x));
+    const right = Math.min(boardRect.right, Math.max(marquee.start.x, marquee.current.x));
+    const top = Math.max(boardRect.top, Math.min(marquee.start.y, marquee.current.y));
+    const bottom = Math.min(boardRect.bottom, Math.max(marquee.start.y, marquee.current.y));
+    marquee.element.style.left = `${left - boardRect.left}px`;
+    marquee.element.style.top = `${top - boardRect.top}px`;
+    marquee.element.style.width = `${Math.max(0, right - left)}px`;
+    marquee.element.style.height = `${Math.max(0, bottom - top)}px`;
+    selectedIds.clear();
+    boardLayer.querySelectorAll<HTMLElement>(':scope > .letter-tile').forEach(element => {
+      const id = element.dataset.id;
+      const tile = id ? tiles.find(candidate => candidate.id === id && candidate.x != null && candidate.y != null) : undefined;
+      const rect = element.getBoundingClientRect();
+      const selected = !!tile && rect.right >= left && rect.left <= right && rect.bottom >= top && rect.top <= bottom;
+      element.classList.toggle('is-selected', selected);
+      if (selected && id) selectedIds.add(id);
+    });
+    selectedId = [...selectedIds].at(-1) ?? null;
+    dump.disabled = !selectedId || (state?.bunch ?? 0) < 3 || state?.phase !== 'playing';
   }
 
   function resetAllGestures(): void {
     cancelDrag();
+    finishMarquee(true);
     resetPointerGesture();
     nativeGesture = null;
   }
@@ -2072,7 +2199,9 @@ export function createTiles(root: HTMLElement): void {
     if (!text || state?.phase !== 'lobby') return;
     setButtonLoading(chatSend, true, 'Sending…');
     chatInput.value = '';
-    send({ t: 'chat', id: crypto.randomUUID(), text });
+    const messageId = crypto.randomUUID();
+    pendingChatMessages.set(messageId, { text, attempts: 0, timer: null });
+    transmitPendingChat(messageId);
     window.setTimeout(() => setButtonLoading(chatSend, false), 3_000);
   });
   copyLink.addEventListener('click', async () => {
@@ -2099,15 +2228,44 @@ export function createTiles(root: HTMLElement): void {
 
   board.addEventListener('pointerdown', event => {
     if ((event.target as HTMLElement).closest('.letter-tile, [data-board-controls]')) return;
+    if (marquee && marquee.pointerId !== event.pointerId) {
+      const first = marquee;
+      finishMarquee(true);
+      pointers.clear();
+      pointers.set(first.pointerId, first.current);
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      try { board.setPointerCapture(first.pointerId); } catch {}
+      board.setPointerCapture(event.pointerId);
+      board.classList.add('is-panning');
+      const current = gestureFromPointers();
+      if (current) gesture = { ...current, camera: { ...camera }, world: screenToWorld(current.center.x, current.center.y) };
+      lastCanvasTap = null;
+      event.preventDefault();
+      return;
+    }
     if (pointers.has(event.pointerId)) return;
+    const doubleTap = !pointers.size && !!lastCanvasTap && performance.now() - lastCanvasTap.at < 420
+      && Math.hypot(event.clientX - lastCanvasTap.x, event.clientY - lastCanvasTap.y) < 36;
+    if (doubleTap && canEditTiles()) {
+      lastCanvasTap = null;
+      canvasPress = null;
+      beginMarquee(event);
+      event.preventDefault();
+      return;
+    }
     if (!pointers.size) {
       nativeGesture = null;
       clearSelection();
+      canvasPress = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false };
     }
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     board.setPointerCapture(event.pointerId);
     board.classList.add('is-panning');
     const current = gestureFromPointers();
+    if (current) {
+      canvasPress = null;
+      lastCanvasTap = null;
+    }
     gesture = current ? { ...current, camera: { ...camera }, world: screenToWorld(current.center.x, current.center.y) } : {
       center: { x: event.clientX, y: event.clientY }, distance: 0, angle: 0, camera: { ...camera }, rotate: event.shiftKey || event.altKey,
     };
@@ -2124,11 +2282,22 @@ export function createTiles(root: HTMLElement): void {
     try { board.setPointerCapture(event.pointerId); } catch {}
     board.classList.add('is-panning');
     const current = gestureFromPointers();
-    if (current) gesture = { ...current, camera: { ...camera }, world: screenToWorld(current.center.x, current.center.y) };
+    if (current) {
+      canvasPress = null;
+      lastCanvasTap = null;
+      gesture = { ...current, camera: { ...camera }, world: screenToWorld(current.center.x, current.center.y) };
+    }
     event.preventDefault();
   }, { capture: true });
   board.addEventListener('pointermove', event => {
+    if (marquee?.pointerId === event.pointerId) {
+      updateMarquee(event);
+      event.preventDefault();
+      return;
+    }
     if (!pointers.has(event.pointerId) || !gesture) return;
+    if (canvasPress?.pointerId === event.pointerId
+      && Math.hypot(event.clientX - canvasPress.x, event.clientY - canvasPress.y) > 8) canvasPress.moved = true;
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     const current = gestureFromPointers();
     if (current && gesture.distance > 0) {
@@ -2154,7 +2323,17 @@ export function createTiles(root: HTMLElement): void {
     applyCamera();
   });
   const endGesture = (event: PointerEvent) => {
+    if (marquee?.pointerId === event.pointerId) {
+      finishMarquee(event.type === 'pointercancel');
+      return;
+    }
     if (!pointers.has(event.pointerId)) return;
+    if (canvasPress?.pointerId === event.pointerId) {
+      if (!canvasPress.moved && event.type !== 'pointercancel') {
+        lastCanvasTap = { x: event.clientX, y: event.clientY, at: performance.now() };
+      } else lastCanvasTap = null;
+      canvasPress = null;
+    }
     pointers.delete(event.pointerId);
     if (!pointers.size) {
       gesture = null;
@@ -2185,6 +2364,7 @@ export function createTiles(root: HTMLElement): void {
     const event = raw as Event & { clientX?: number; clientY?: number };
     event.preventDefault();
     cancelDrag();
+    finishMarquee(true);
     resetPointerGesture();
     const rect = board.getBoundingClientRect();
     nativeGesture = {
