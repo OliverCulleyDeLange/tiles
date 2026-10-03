@@ -2,6 +2,7 @@ package uk.co.oliverdelange.tiles;
 
 import android.Manifest;
 import android.os.Build;
+import android.view.WindowManager;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -105,6 +106,7 @@ public class NearbyConnectionsPlugin extends Plugin {
     @PluginMethod
     public void startAdvertising(PluginCall call) {
         String name = call.getString("name", "Tiles player");
+        client.stopAdvertising();
         client.startAdvertising(name, SERVICE_ID, lifecycle,
                 new AdvertisingOptions.Builder().setStrategy(Strategy.P2P_STAR).build())
             .addOnSuccessListener(unused -> call.resolve())
@@ -113,10 +115,28 @@ public class NearbyConnectionsPlugin extends Plugin {
 
     @PluginMethod
     public void startDiscovery(PluginCall call) {
+        client.stopDiscovery();
         client.startDiscovery(SERVICE_ID, discovery,
                 new DiscoveryOptions.Builder().setStrategy(Strategy.P2P_STAR).build())
             .addOnSuccessListener(unused -> call.resolve())
             .addOnFailureListener(error -> call.reject(error.getMessage(), error));
+    }
+
+    @PluginMethod
+    public void stopDiscovery(PluginCall call) {
+        client.stopDiscovery();
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void setKeepAwake(PluginCall call) {
+        boolean enabled = Boolean.TRUE.equals(call.getBoolean("enabled"));
+        if (getActivity() == null) { call.resolve(); return; }
+        getActivity().runOnUiThread(() -> {
+            if (enabled) getActivity().getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            else getActivity().getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            call.resolve();
+        });
     }
 
     @PluginMethod
@@ -162,6 +182,8 @@ public class NearbyConnectionsPlugin extends Plugin {
         client.stopAdvertising();
         client.stopDiscovery();
         client.stopAllEndpoints();
+        if (getActivity() != null) getActivity().runOnUiThread(() ->
+            getActivity().getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON));
         call.resolve();
     }
 

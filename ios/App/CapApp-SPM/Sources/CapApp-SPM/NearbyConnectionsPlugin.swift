@@ -2,6 +2,7 @@ import Capacitor
 import CoreLocation
 import Foundation
 import NearbyConnections
+import UIKit
 
 @objc(NearbyConnectionsPlugin)
 public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
@@ -12,6 +13,8 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "requestPermissions", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startAdvertising", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startDiscovery", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "stopDiscovery", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setKeepAwake", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "requestConnection", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "acceptVerification", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "send", returnType: CAPPluginReturnPromise),
@@ -44,20 +47,45 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc public func startAdvertising(_ call: CAPPluginCall) {
         localName = call.getString("name") ?? localName
-        let value = Advertiser(connectionManager: configure())
-        value.delegate = self
-        advertiser = value
+        let value: Advertiser
+        if let current = advertiser {
+            current.stopAdvertising()
+            value = current
+        } else {
+            value = Advertiser(connectionManager: manager ?? configure())
+            value.delegate = self
+            advertiser = value
+        }
         value.startAdvertising(using: Data(localName.utf8))
         call.resolve()
     }
 
     @objc public func startDiscovery(_ call: CAPPluginCall) {
         localName = call.getString("name") ?? localName
-        let value = Discoverer(connectionManager: configure())
-        value.delegate = self
-        discoverer = value
+        let value: Discoverer
+        if let current = discoverer {
+            current.stopDiscovery()
+            value = current
+        } else {
+            value = Discoverer(connectionManager: manager ?? configure())
+            value.delegate = self
+            discoverer = value
+        }
         value.startDiscovery()
         call.resolve()
+    }
+
+    @objc public func stopDiscovery(_ call: CAPPluginCall) {
+        discoverer?.stopDiscovery()
+        call.resolve()
+    }
+
+    @objc public func setKeepAwake(_ call: CAPPluginCall) {
+        let enabled = call.getBool("enabled") ?? false
+        DispatchQueue.main.async {
+            UIApplication.shared.isIdleTimerDisabled = enabled
+            call.resolve()
+        }
     }
 
     @objc public func requestConnection(_ call: CAPPluginCall) {
@@ -93,6 +121,7 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
         advertiser = nil
         discoverer = nil
         manager = nil
+        DispatchQueue.main.async { UIApplication.shared.isIdleTimerDisabled = false }
         call.resolve()
     }
 
