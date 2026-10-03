@@ -193,11 +193,10 @@ export class LocalRoomHost {
     if (this.resumePhase) {
       this.phase = this.resumePhase;
       this.resumePhase = undefined;
-      for (const player of this.players) {
-        if (player.connected) this.deliver(player.id, { t: 'hand', tiles: player.hand, replace: true });
-      }
-      this.broadcast({ t: 'toast', text: 'GAME RESUMED! Pick up where you left off.', tone: 'good' });
-      this.broadcastRoom();
+      this.broadcastSync(
+        player => ({ tiles: player.hand, replace: true }),
+        { text: 'GAME RESUMED! Pick up where you left off.', tone: 'good' },
+      );
       return;
     }
     this.deal(false);
@@ -217,17 +216,18 @@ export class LocalRoomHost {
     this.reviewBoard = undefined;
     this.reviewEndsAt = undefined;
     this.rottenCalled = false;
-    if (restarting) this.broadcast({ t: 'new-game' });
     const starting = this.players.length <= 4 ? 21 : this.players.length <= 6 ? 15 : 11;
     for (const player of this.players) {
       player.hand = this.bag.splice(-starting);
       player.board = [];
       player.eliminated = false;
       player.voted = false;
-      if (player.connected) this.deliver(player.id, { t: 'hand', tiles: player.hand, replace: true });
     }
-    this.broadcast({ t: 'toast', text: restarting ? 'NEW GAME! Fresh tiles for everyone.' : 'SPLIT! Build your grid.', tone: 'good' });
-    this.broadcastRoom();
+    this.broadcastSync(
+      player => ({ tiles: player.hand, replace: true }),
+      { text: restarting ? 'NEW GAME! Fresh tiles for everyone.' : 'SPLIT! Build your grid.', tone: 'good' },
+      restarting,
+    );
   }
 
   private layout(player: LocalPlayer, raw: PlacedTile[]): void {
@@ -258,14 +258,17 @@ export class LocalRoomHost {
       return;
     }
     this.peel++;
+    const additions = new Map<string, Tile>();
     for (const candidate of active) {
       const drawn = this.bag.pop();
       if (!drawn) continue;
       candidate.hand.push(drawn);
-      if (candidate.connected) this.deliver(candidate.id, { t: 'hand', tiles: [drawn], replace: false });
+      additions.set(candidate.id, drawn);
     }
-    this.broadcast({ t: 'toast', text: `${player.name} peeled!`, tone: 'plain' });
-    this.broadcastRoom();
+    this.broadcastSync(
+      candidate => ({ tiles: additions.has(candidate.id) ? [additions.get(candidate.id)!] : [], replace: false }),
+      { text: `${player.name} peeled!`, tone: 'plain' },
+    );
   }
 
   private dump(player: LocalPlayer, tileId: string): void {
@@ -335,6 +338,17 @@ export class LocalRoomHost {
   private broadcastRoom(except?: string): void {
     const message: ServerMessage = { t: 'room', room: this.snapshot() };
     this.players.forEach(player => { if (player.connected && player.id !== except) this.deliver(player.id, message); });
+  }
+
+  private broadcastSync(
+    handFor: (player: LocalPlayer) => { tiles: Tile[]; replace: boolean },
+    toast: { text: string; tone?: 'good' | 'bad' | 'plain' },
+    reset = false,
+  ): void {
+    const room = this.snapshot();
+    this.players.forEach(player => {
+      if (player.connected) this.deliver(player.id, { t: 'room', room, hand: handFor(player), reset, toast });
+    });
   }
 }
 

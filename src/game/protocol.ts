@@ -96,7 +96,13 @@ export type ClientMessage =
 
 export type ServerMessage =
   | { t: 'welcome'; id: string; resumeToken?: string; room: RoomSnapshot }
-  | { t: 'room'; room: RoomSnapshot }
+  | {
+      t: 'room';
+      room: RoomSnapshot;
+      hand?: { tiles: Tile[]; replace: boolean };
+      reset?: boolean;
+      toast?: { text: string; tone?: 'good' | 'bad' | 'plain' };
+    }
   | { t: 'layout'; playerId: string; board: PlacedTile[] }
   | { t: 'new-game' }
   | { t: 'hand'; tiles: Tile[]; replace: boolean }

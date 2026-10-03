@@ -398,6 +398,40 @@ export function createTiles(root: HTMLElement): void {
     return Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
   }
 
+  function resetGameState(): void {
+    setButtonLoading(newGame, false);
+    cancelDrag();
+    clearEditHistory();
+    tiles = [];
+    rackOrder = [];
+    selectedId = null;
+    selectedIds.clear();
+    peelSent = -1;
+  }
+
+  function applyHand(nextTiles: Tile[], replace: boolean): void {
+    setButtonLoading(dump, false);
+    if (replace) {
+      clearEditHistory();
+      const previous = new Map(tiles.map(tile => [tile.id, tile]));
+      const restored = new Map((state?.players.find(player => player.id === myId)?.board ?? []).map(tile => [tile.id, tile]));
+      tiles = nextTiles.map(tile => {
+        const placed = previous.get(tile.id) ?? restored.get(tile.id);
+        return { ...tile, x: placed?.x ?? null, y: placed?.y ?? null };
+      });
+      syncRackOrder(tiles.map(tile => tile.id));
+    } else {
+      const additions = nextTiles.map(tile => ({ ...tile, x: null, y: null }));
+      tiles.push(...additions);
+      addRackTiles(additions.map(tile => tile.id));
+    }
+    if (!dragging) {
+      selectedId = null;
+      selectedIds.clear();
+      renderTiles();
+    }
+  }
+
   function handleServerMessage(message: ServerMessage): void {
     if (message.t === 'welcome') {
       myId = message.id;
@@ -406,7 +440,12 @@ export function createTiles(root: HTMLElement): void {
       connectionRestored();
       reconnectAttempt = 0;
       updateRoom(message.room);
-    } else if (message.t === 'room') updateRoom(message.room);
+    } else if (message.t === 'room') {
+      if (message.reset) resetGameState();
+      updateRoom(message.room);
+      if (message.hand) applyHand(message.hand.tiles, message.hand.replace);
+      if (message.toast) show(message.toast.text, message.toast.tone);
+    }
     else if (message.t === 'chat') {
       const empty = chatLog.querySelector('[data-chat-empty]');
       empty?.remove();
@@ -426,14 +465,7 @@ export function createTiles(root: HTMLElement): void {
       if (message.playerId === myId) setButtonLoading(chatSend, false);
     }
     else if (message.t === 'new-game') {
-      setButtonLoading(newGame, false);
-      cancelDrag();
-      clearEditHistory();
-      tiles = [];
-      rackOrder = [];
-      selectedId = null;
-      selectedIds.clear();
-      peelSent = -1;
+      resetGameState();
       renderTiles();
     } else if (message.t === 'layout') {
       const player = state?.players.find(value => value.id === message.playerId);
@@ -446,26 +478,7 @@ export function createTiles(root: HTMLElement): void {
       }
       if (!dragging && !gesture && !nativeGesture) renderTiles();
     } else if (message.t === 'hand') {
-      setButtonLoading(dump, false);
-      if (message.replace) {
-        clearEditHistory();
-        const previous = new Map(tiles.map(tile => [tile.id, tile]));
-        const restored = new Map((state?.players.find(player => player.id === myId)?.board ?? []).map(tile => [tile.id, tile]));
-        tiles = message.tiles.map(tile => {
-          const placed = previous.get(tile.id) ?? restored.get(tile.id);
-          return { ...tile, x: placed?.x ?? null, y: placed?.y ?? null };
-        });
-        syncRackOrder(tiles.map(tile => tile.id));
-      } else {
-        const additions = message.tiles.map(tile => ({ ...tile, x: null, y: null }));
-        tiles.push(...additions);
-        addRackTiles(additions.map(tile => tile.id));
-      }
-      if (!dragging) {
-        selectedId = null;
-        selectedIds.clear();
-        renderTiles();
-      }
+      applyHand(message.tiles, message.replace);
     } else if (message.t === 'toast') show(message.text, message.tone);
     else if (message.t === 'error') {
       show(message.message, 'bad');
@@ -967,6 +980,10 @@ export function createTiles(root: HTMLElement): void {
     clearNearbyHelloTimer();
     if (connectionMode === 'nearby-join') {
       void NearbyConnections.stopAdvertising();
+      void NearbyConnections.stopDiscovery();
+    } else if (connectionMode === 'nearby-host' && next.phase !== 'lobby') {
+      // The host no longer needs to scan once play begins. Leaving discovery active
+      // competes with the high-bandwidth peer connection on some devices.
       void NearbyConnections.stopDiscovery();
     }
     state = next;
