@@ -16,7 +16,7 @@ import {
   type Tile,
 } from './protocol';
 import { LocalRoomHost, type StoredLocalRoom } from './local-room';
-import { NearbyConnections, isNativeNearby, type NearbyEndpoint, type NearbyVerification } from './nearby';
+import { NearbyConnections, isNativeNearby, type NearbyEndpoint, type NearbyPayload, type NearbyVerification } from './nearby';
 import { gunzipSync } from 'fflate';
 import QRCode from 'qrcode';
 import { Capacitor } from '@capacitor/core';
@@ -163,6 +163,21 @@ export function createTiles(root: HTMLElement): void {
   const nearbyInviteStates = new Map<string, { name: string; status: 'requested' | 'received' | 'accepted' }>();
   type NearbyPeerPhase = 'searching' | 'found' | 'requesting' | 'requested' | 'authenticating' | 'transport' | 'syncing' | 'synced' | 'disconnected' | 'failed';
   const nearbyPeerStates = new Map<string, { phase: NearbyPeerPhase; detail: string }>();
+  type NearbyWirePacket =
+    | { w: 1; t: 'data'; sequence: number; payload: ClientMessage | ServerMessage }
+    | { w: 1; t: 'ack'; sequence: number };
+  interface PendingNearbyPacket {
+    endpointId: string;
+    endpointName: string;
+    sequence: number;
+    encoded: string;
+    attempts: number;
+    timer: number | null;
+  }
+  const nearbySendSequences = new Map<string, number>();
+  const nearbyReceiveSequences = new Map<string, number>();
+  const nearbyReceiveBuffers = new Map<string, Map<number, ClientMessage | ServerMessage>>();
+  const pendingNearbyPackets = new Map<string, PendingNearbyPacket>();
   let nearbyHomeStarting = false;
   let pendingNearbyInvite: NearbyVerification | null = null;
   let transportSend: ((message: object) => void) | null = null;
@@ -537,6 +552,7 @@ export function createTiles(root: HTMLElement): void {
       if (message.resumeToken) localStorage.setItem(sessionKey(), message.resumeToken);
       if (connectionMode === 'nearby-join' && nearbyHostName) {
         setNearbyPeerState(nearbyHostName, 'synced', 'App handshake complete · lobby synced');
+        if (nearbyHostId) updateNearbyChannelProgress(nearbyHostId);
       }
       connectionRestored();
       reconnectAttempt = 0;
@@ -750,10 +766,149 @@ export function createTiles(root: HTMLElement): void {
     if (isCurrent()) scheduleNearbyHomeRefresh();
   }
 
+  function nearbyPacketKey(endpointId: string, sequence: number): string {
+    return `${endpointId}:${sequence}`;
+  }
+
+  function nearbyEndpointName(endpointId: string): string {
+    const name = nearbyEndpointMap.get(endpointId)?.name
+      ?? state?.players.find(player => player.id === endpointId)?.name
+      ?? (nearbyHostId === endpointId ? nearbyHostName : '');
+    return name || 'Nearby player';
+  }
+
+  function sendNearbyRaw(endpointId: string, encoded: string): Promise<void> {
+    return NearbyConnections.send({ endpointIds: [endpointId], payload: encoded });
+  }
+
+  function clearNearbyChannel(endpointId: string): void {
+    for (const [key, pending] of pendingNearbyPackets) {
+      if (pending.endpointId !== endpointId) continue;
+      if (pending.timer != null) window.clearTimeout(pending.timer);
+      pendingNearbyPackets.delete(key);
+    }
+    nearbySendSequences.delete(endpointId);
+    nearbyReceiveSequences.delete(endpointId);
+    nearbyReceiveBuffers.delete(endpointId);
+  }
+
+  function clearAllNearbyChannels(): void {
+    for (const pending of pendingNearbyPackets.values()) {
+      if (pending.timer != null) window.clearTimeout(pending.timer);
+    }
+    pendingNearbyPackets.clear();
+    nearbySendSequences.clear();
+    nearbyReceiveSequences.clear();
+    nearbyReceiveBuffers.clear();
+  }
+
+  function updateNearbyChannelProgress(endpointId: string): void {
+    const endpointName = nearbyEndpointName(endpointId);
+    const current = nearbyPeerStates.get(nearbyPeerKey(endpointName));
+    if (current?.phase !== 'synced') return;
+    const pending = [...pendingNearbyPackets.values()].filter(packet => packet.endpointId === endpointId).length;
+    setNearbyPeerState(
+      endpointName,
+      'synced',
+      pending
+        ? `Reliable channel · ${pending} ${pending === 1 ? 'packet' : 'packets'} awaiting acknowledgement`
+        : 'Reliable channel synced · all packets acknowledged',
+    );
+  }
+
+  function failNearbyPacket(pending: PendingNearbyPacket): void {
+    const key = nearbyPacketKey(pending.endpointId, pending.sequence);
+    if (!pendingNearbyPackets.has(key)) return;
+    clearNearbyChannel(pending.endpointId);
+    setNearbyPeerState(pending.endpointName, 'failed', `Transport stalled · packet ${pending.sequence} was not acknowledged`);
+    void NearbyConnections.disconnect({ endpointId: pending.endpointId });
+    if (connectionMode === 'nearby-join' && nearbyHostId === pending.endpointId) beginNearbyReconnect();
+  }
+
+  function transmitNearbyPacket(pending: PendingNearbyPacket): void {
+    const key = nearbyPacketKey(pending.endpointId, pending.sequence);
+    if (!pendingNearbyPackets.has(key)) return;
+    if (pending.timer != null) window.clearTimeout(pending.timer);
+    pending.attempts += 1;
+    void sendNearbyRaw(pending.endpointId, pending.encoded).catch(() => undefined);
+    if (pending.attempts >= 6) {
+      pending.timer = window.setTimeout(() => failNearbyPacket(pending), 4_000);
+      return;
+    }
+    const retryAfter = Math.min(4_000, 500 * 2 ** (pending.attempts - 1));
+    pending.timer = window.setTimeout(() => transmitNearbyPacket(pending), retryAfter);
+  }
+
   function sendNearby(endpointId: string, message: object): void {
-    void NearbyConnections.send({ endpointIds: [endpointId], payload: JSON.stringify(message) }).catch(() => {
-      if (connectionMode === 'nearby-join' && nearbyHostId === endpointId) beginNearbyReconnect();
-    });
+    const sequence = (nearbySendSequences.get(endpointId) ?? 0) + 1;
+    nearbySendSequences.set(endpointId, sequence);
+    const packet: NearbyWirePacket = {
+      w: 1,
+      t: 'data',
+      sequence,
+      payload: message as ClientMessage | ServerMessage,
+    };
+    const pending: PendingNearbyPacket = {
+      endpointId,
+      endpointName: nearbyEndpointName(endpointId),
+      sequence,
+      encoded: JSON.stringify(packet),
+      attempts: 0,
+      timer: null,
+    };
+    pendingNearbyPackets.set(nearbyPacketKey(endpointId, sequence), pending);
+    updateNearbyChannelProgress(endpointId);
+    transmitNearbyPacket(pending);
+  }
+
+  function acknowledgeNearbyPacket(endpointId: string, sequence: number): void {
+    const packet: NearbyWirePacket = { w: 1, t: 'ack', sequence };
+    void sendNearbyRaw(endpointId, JSON.stringify(packet)).catch(() => undefined);
+  }
+
+  function deliverNearbyMessage(endpointId: string, endpointName: string, message: ClientMessage | ServerMessage): void {
+    if (localHost) {
+      if (message.t === 'hello') setNearbyPeerState(endpointName, 'synced', 'App handshake received · reliable channel synced');
+      localHost.receive(endpointId, message as ClientMessage);
+    } else handleServerMessage(message as ServerMessage);
+  }
+
+  function receiveNearbyPacket(event: NearbyPayload): void {
+    let packet: NearbyWirePacket;
+    try { packet = JSON.parse(event.payload) as NearbyWirePacket; } catch { return; }
+    if (packet?.w !== 1 || !Number.isSafeInteger(packet.sequence) || packet.sequence < 1) return;
+    if (packet.t === 'ack') {
+      const key = nearbyPacketKey(event.endpointId, packet.sequence);
+      const pending = pendingNearbyPackets.get(key);
+      if (!pending) return;
+      if (pending.timer != null) window.clearTimeout(pending.timer);
+      pendingNearbyPackets.delete(key);
+      updateNearbyChannelProgress(event.endpointId);
+      return;
+    }
+    if (packet.t !== 'data' || !packet.payload || typeof packet.payload !== 'object') return;
+
+    acknowledgeNearbyPacket(event.endpointId, packet.sequence);
+    const expected = nearbyReceiveSequences.get(event.endpointId) ?? 1;
+    if (packet.sequence < expected) return;
+    if (packet.sequence > expected) {
+      const buffer = nearbyReceiveBuffers.get(event.endpointId) ?? new Map<number, ClientMessage | ServerMessage>();
+      buffer.set(packet.sequence, packet.payload);
+      nearbyReceiveBuffers.set(event.endpointId, buffer);
+      return;
+    }
+
+    let sequence = expected;
+    let payload: ClientMessage | ServerMessage | undefined = packet.payload;
+    const buffer = nearbyReceiveBuffers.get(event.endpointId);
+    while (payload) {
+      deliverNearbyMessage(event.endpointId, event.name, payload);
+      sequence += 1;
+      payload = buffer?.get(sequence);
+      if (payload) buffer?.delete(sequence);
+    }
+    nearbyReceiveSequences.set(event.endpointId, sequence);
+    if (buffer?.size === 0) nearbyReceiveBuffers.delete(event.endpointId);
   }
 
   function beginNearbyReconnect(): void {
@@ -1217,6 +1372,7 @@ export function createTiles(root: HTMLElement): void {
       else void NearbyConnections.acceptVerification({ endpointId: verification.endpointId, accept: false });
     });
     await NearbyConnections.addListener('connected', endpoint => {
+      clearNearbyChannel(endpoint.endpointId);
       connectionRestored();
       setNearbyPeerState(endpoint.name, 'transport', 'Nearby transport connected · waiting for app handshake');
       if (localHost) {
@@ -1251,6 +1407,7 @@ export function createTiles(root: HTMLElement): void {
       enterNearbyGuest(endpoint);
     });
     await NearbyConnections.addListener('disconnected', endpoint => {
+      clearNearbyChannel(endpoint.endpointId);
       setNearbyPeerState(endpoint.name, 'disconnected', 'Nearby transport disconnected · retry required');
       if (connectionMode === 'nearby-host' && localHost) {
         const pendingInvite = outgoingNearbyInvites.has(endpoint.endpointId);
@@ -1279,13 +1436,7 @@ export function createTiles(root: HTMLElement): void {
       }
     });
     await NearbyConnections.addListener('payloadReceived', event => {
-      try {
-        const message = JSON.parse(event.payload) as ClientMessage | ServerMessage;
-        if (localHost) {
-          if (message.t === 'hello') setNearbyPeerState(event.name, 'synced', 'App handshake received · lobby synced');
-          localHost.receive(event.endpointId, message as ClientMessage);
-        } else handleServerMessage(message as ServerMessage);
-      } catch { /* Ignore malformed nearby payloads. */ }
+      receiveNearbyPacket(event);
     });
     if (sanitizeName(nameInput.value)) void startNearbyHome();
     else nearbyStatus.textContent = 'Enter your player name to appear for nearby players.';
@@ -1295,6 +1446,7 @@ export function createTiles(root: HTMLElement): void {
     try {
       await requestNearbyPermissions();
       clearNearbyHomeRefreshTimer();
+      clearAllNearbyChannels();
       connectionMode = 'nearby-host';
       nearbyName = name;
       nearbyAutoReconnect = false;
@@ -2573,6 +2725,7 @@ export function createTiles(root: HTMLElement): void {
     clearNearbyReconnectTimer();
     clearNearbyHelloTimer();
     clearNearbyHomeRefreshTimer();
+    clearAllNearbyChannels();
     transportSend = null;
     localHost = null;
     nearbyInviteStates.clear();
