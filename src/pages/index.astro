@@ -287,9 +287,9 @@
   .copy-action { background: var(--tr-yellow); }
   .share-action { background: #fff; }
   .lobby-actions { display: grid; gap: .65rem; }
-  .game-shell { position: fixed; inset: 0; width: 100%; height: 100vh; height: 100dvh; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; background: var(--tr-cream); overflow: hidden; }
+  .game-shell { position: fixed; inset: 0; min-width: 0; min-height: 0; display: grid; grid-template-rows: max-content max-content minmax(0, 1fr) max-content; background: var(--tr-cream); overflow: hidden; }
   .game-shell[hidden], .entry-card[hidden], .lobby-card[hidden] { display: none; }
-  .game-bar { min-width: 0; min-height: 48px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: .55rem; padding: max(.35rem, env(safe-area-inset-top)) max(.6rem, env(safe-area-inset-right)) .35rem max(.6rem, env(safe-area-inset-left)); border-bottom: 2px solid var(--tr-ink); background: var(--tr-yellow); }
+  .game-bar { grid-row: 1; min-width: 0; min-height: 48px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: .55rem; padding: max(.35rem, env(safe-area-inset-top)) max(.6rem, env(safe-area-inset-right)) .35rem max(.6rem, env(safe-area-inset-left)); border-bottom: 2px solid var(--tr-ink); background: var(--tr-yellow); }
   .compact-brand { display: flex; align-items: center; gap: .75rem; font-family: Georgia, serif; }
   .compact-brand span { width: 2rem; background: #fff6bf; font-size: .72rem; box-shadow: 2px 2px 0 var(--tr-ink); }
   .compact-brand strong { font-size: .88rem; }
@@ -307,7 +307,7 @@
   .history-button:disabled { opacity: .35; box-shadow: none; cursor: default; }
   .direction-button { min-height: 2.25rem; padding: .3rem .45rem; border: 1.5px solid var(--tr-ink); border-radius: 7px; background: #d8f8e3; color: var(--tr-ink); cursor: pointer; box-shadow: 2px 2px 0 #000; font: 800 .72rem/1 inherit; }
   .menu-button { min-height: 2.25rem; padding: .3rem .65rem; border-width: 1.5px; border-radius: 7px; background: var(--tr-yellow); color: var(--tr-ink); cursor: pointer; box-shadow: 2px 2px 0 var(--tr-ink); font-size: .76rem; }
-  .play-layout { min-height: 0; }
+  .play-layout { position: relative; grid-row: 3; min-width: 0; min-height: 0; overflow: hidden; }
   .player-chip { min-height: 28px; display: flex; align-items: center; gap: .35rem; border: 1.5px solid var(--tr-ink); border-radius: 999px; background: #fff; color: var(--tr-ink); padding: .18rem .55rem; font: 700 .72rem/1 inherit; cursor: pointer; }
   .player-chip.is-you { background: var(--tr-yellow); }
   .player-chip.is-viewing { outline: 2px solid var(--tr-ink); outline-offset: 2px; }
@@ -315,9 +315,9 @@
   .player-chip.is-offline { background: #ffb0a3; opacity: 1; }
   .player-chip i { width: .65rem; height: .65rem; flex: 0 0 auto; border: 1px solid var(--tr-ink); border-radius: 50%; background: var(--owner-color); }
   .player-chip b { font-size: .62rem; text-transform: uppercase; }
-  .player-disconnect-notice { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: .45rem; padding: .4rem max(.7rem, env(safe-area-inset-right)) .4rem max(.7rem, env(safe-area-inset-left)); border-bottom: 2px solid var(--tr-ink); background: #ffb0a3; color: var(--tr-ink); font-size: .78rem; font-weight: 900; text-align: center; }
+  .player-disconnect-notice { grid-row: 2; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: .45rem; padding: .4rem max(.7rem, env(safe-area-inset-right)) .4rem max(.7rem, env(safe-area-inset-left)); border-bottom: 2px solid var(--tr-ink); background: #ffb0a3; color: var(--tr-ink); font-size: .78rem; font-weight: 900; text-align: center; }
   .player-disconnect-notice[hidden] { display: none; }
-  .board { position: relative; overflow: hidden; width: 100%; height: 100%; min-width: 0; min-height: 0; cursor: grab; background: #d9cba8; touch-action: none; overscroll-behavior: contain; }
+  .board { position: absolute; inset: 0; overflow: hidden; min-width: 0; min-height: 0; cursor: grab; background: #d9cba8; touch-action: none; overscroll-behavior: contain; }
   .board.is-panning { cursor: grabbing; }
   .board-layer { position: absolute; left: 50%; top: 50%; width: 4800px; height: 4800px; margin: -2400px 0 0 -2400px; transform-origin: 50% 50%; background-color: #eee4c5; background-image: radial-gradient(ellipse at center, rgba(255,251,229,.92) 0%, rgba(238,228,197,.48) 48%, rgba(196,177,132,.28) 100%), radial-gradient(circle at 22% 31%, rgba(113,91,49,.13) 0 1.2px, transparent 1.8px), radial-gradient(circle at 71% 63%, rgba(255,255,255,.52) 0 1.4px, transparent 2px), radial-gradient(circle at 43% 78%, rgba(130,101,54,.09) 0 1px, transparent 1.7px); background-size: 100% 100%, 37px 41px, 53px 47px, 61px 59px; will-change: transform; }
   .board-label { position: absolute; z-index: 5; top: .45rem; left: .5rem; padding: .25rem .5rem; border: 1px solid #b9ad87; border-radius: 999px; background: rgba(255,249,223,.86); color: #5d543d; font-size: .68rem; font-weight: 800; pointer-events: none; }
@@ -338,7 +338,7 @@
   .letter-tile.is-selected { outline-color: var(--tr-coral); }
   .letter-tile.is-dragging { cursor: grabbing; transform: rotate(4deg) scale(1.04); }
   .tile-drag-overlay { z-index: 200; }
-  .rack-wrap { display: grid; grid-template-columns: minmax(0, 1fr); gap: .55rem; align-items: center; min-height: 76px; max-height: min(34dvh, 245px); overflow: hidden; padding: .42rem max(.6rem, env(safe-area-inset-right)) max(.42rem, env(safe-area-inset-bottom)) max(.6rem, env(safe-area-inset-left)); border-top: 2px solid var(--tr-ink); background: #2c2921; color: white; }
+  .rack-wrap { grid-row: 4; display: grid; grid-template-columns: minmax(0, 1fr); gap: .55rem; align-items: center; min-height: 76px; max-height: min(34vh, 245px); overflow: hidden; padding: .42rem max(.6rem, env(safe-area-inset-right)) max(.42rem, env(safe-area-inset-bottom)) max(.6rem, env(safe-area-inset-left)); border-top: 2px solid var(--tr-ink); background: #2c2921; color: white; }
   .rack { width: 100%; min-height: 48px; max-height: min(24dvh, 192px); display: flex; flex-wrap: wrap; align-content: flex-start; gap: .28rem; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
   .rack-slot { flex: 0 0 48px; width: 48px; height: 48px; }
   .rack-slot:empty { border: 1px dashed rgba(255,255,255,.16); border-radius: 6px; }
