@@ -904,6 +904,8 @@ export function createTiles(root: HTMLElement): void {
     await NearbyConnections.addListener('endpointLost', endpoint => {
       nearbyEndpointMap.delete(endpoint.endpointId);
       selectedNearbyIds.delete(endpoint.endpointId);
+      outgoingNearbyInvites.delete(endpoint.endpointId);
+      nearbyInviteStates.delete(endpoint.endpointId);
       if (nearbyConnectingId === endpoint.endpointId) nearbyConnectingId = null;
       renderNearbyEndpoints();
       if (state && connectionMode === 'nearby-host') {
@@ -961,6 +963,20 @@ export function createTiles(root: HTMLElement): void {
     });
     await NearbyConnections.addListener('disconnected', endpoint => {
       if (connectionMode === 'nearby-host' && localHost) {
+        const pendingInvite = outgoingNearbyInvites.has(endpoint.endpointId);
+        nearbyEndpointMap.delete(endpoint.endpointId);
+        outgoingNearbyInvites.delete(endpoint.endpointId);
+        nearbyInviteStates.delete(endpoint.endpointId);
+        selectedNearbyIds.delete(endpoint.endpointId);
+        if (pendingInvite) {
+          if (state) {
+            renderLobbyRoster(state);
+            renderPlayerDisconnect(state);
+          }
+          show(`${endpoint.name} could not be invited.`, 'bad');
+          scheduleNearbyTransport(0);
+          return;
+        }
         localHost.disconnect(endpoint.endpointId);
         show(`${endpoint.name} disconnected. Waiting for them to rejoin…`, 'bad');
         scheduleNearbyTransport(0);
@@ -995,7 +1011,15 @@ export function createTiles(root: HTMLElement): void {
       stopOnlineTransport();
       await NearbyConnections.setKeepAwake({ enabled: true });
       await NearbyConnections.startAdvertising({ name });
-      if (restored) await NearbyConnections.startDiscovery({ name });
+      if (restored) {
+        // Endpoint IDs are ephemeral. A saved player must be freshly discovered
+        // before we offer an invitation for the restored game.
+        nearbyEndpointMap.clear();
+        selectedNearbyIds.clear();
+        outgoingNearbyInvites.clear();
+        nearbyInviteStates.clear();
+        await NearbyConnections.startDiscovery({ name });
+      }
       roomName = 'nearby';
       if (!restored) {
         localStorage.removeItem(LOCAL_GAME_KEY);
