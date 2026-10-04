@@ -1232,7 +1232,7 @@ export function createTiles(root: HTMLElement): void {
     start.hidden = true;
     chatInput.disabled = true;
     chatSend.disabled = true;
-    lobbyHelp.textContent = 'Keep this screen open while the nearby lobby connects.';
+    lobbyHelp.textContent = 'Only the host can start the game.';
   }
 
   function sendNearbyHello(): void {
@@ -1334,6 +1334,7 @@ export function createTiles(root: HTMLElement): void {
   function heartbeatGraph(playerId: string, unavailable: boolean): string {
     const samples = heartbeatSamples.get(playerId) ?? [];
     const visible = samples.slice(-12);
+    if (visible.length < 2) return '';
     const points = visible.map((sample, index) => {
       const x = visible.length < 2 ? 72 : 34 + index * (82 / (visible.length - 1));
       const y = sample < 0 ? 39 : 38 - Math.min(sample, 600) / 600 * 34;
@@ -1361,7 +1362,7 @@ export function createTiles(root: HTMLElement): void {
       const availability = heartbeatAvailability(player);
       const color = colorForPlayer(player, index);
       const graph = player.id === room.hostId ? '' : heartbeatGraph(player.id, availability.status === 'unavailable' || availability.status === 'disconnected');
-      return `<li style="--owner-color:${color}"><span class="presence ${player.connected === false ? 'is-offline' : ''}" aria-hidden="true"></span><span class="roster-player"><strong style="color:${color}">${escapeHtml(player.name)}</strong><small class="player-availability ${availability.status}">${escapeHtml(availability.text)}</small></span>${graph}${status ? `<em class="invite-state ${status.toLowerCase()}">${status}</em>` : ''}</li>`;
+      return `<li class="player-roster-card" style="--owner-color:${color}"><span class="presence ${player.connected === false ? 'is-offline' : ''}" aria-hidden="true"></span><span class="roster-player"><strong>${escapeHtml(player.name)}</strong><small class="player-availability ${availability.status}">${escapeHtml(availability.text)}</small></span>${graph}${status ? `<em class="invite-state ${status.toLowerCase()}">${status}</em>` : ''}</li>`;
     });
     const inviteRows = connectionMode === 'nearby-host'
       ? [...nearbyInviteStates.values()]
