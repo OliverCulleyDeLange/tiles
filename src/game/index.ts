@@ -175,10 +175,7 @@ export function createTiles(root: HTMLElement): void {
   let nearbyConnectingId: string | null = null;
   let nearbyReconnectAttempt = 0;
   let nearbyReconnectTimer: number | null = null;
-  let nearbyConnectionAttemptTimer: number | null = null;
   let nearbyHelloTimer: number | null = null;
-  let nearbyLobbyConnectTimer: number | null = null;
-  let nearbyTriedReverseRoute = false;
   let nearbyAwaitingWelcome = false;
   let nearbyHomeRefreshTimer: number | null = null;
   let nearbyHomeGeneration = 0;
@@ -186,9 +183,14 @@ export function createTiles(root: HTMLElement): void {
   let nearbyPermissionAliases: string[] | undefined;
   const selectedNearbyIds = new Set<string>();
   const outgoingNearbyInvites = new Set<string>();
+  const nearbyInvitationTargets = new Set<string>();
   const approvedNearbyNames = new Set<string>();
   const pendingReinviteNames = new Set<string>();
-  const nearbyInviteStates = new Map<string, { name: string; status: 'requested' | 'received' | 'accepted' }>();
+  const nearbyInviteStates = new Map<string, {
+    name: string;
+    status: 'requested' | 'received' | 'accepted';
+    deviceId?: string;
+  }>();
   type NearbyPeerPhase = 'searching' | 'found' | 'requesting' | 'requested' | 'authenticating' | 'transport' | 'syncing' | 'synced' | 'disconnected' | 'failed';
   const nearbyPeerStates = new Map<string, { phase: NearbyPeerPhase; detail: string }>();
   type NearbyWirePacket =
@@ -537,18 +539,42 @@ export function createTiles(root: HTMLElement): void {
     : crypto.randomUUID().replaceAll('-', '').slice(0, 8);
   localStorage.setItem('tiles-nearby-device-id', nearbyDeviceId);
 
+  const nearbyPlatform = Capacitor.getPlatform() === 'ios' ? 'i' : 'a';
   const nearbyWireName = (name = nearbyName): string =>
-    `tiles6|${selectedPlayerColor().slice(1)}|${nearbyDeviceId}|${sanitizeName(name)}`;
+    `tiles7|${selectedPlayerColor().slice(1)}|${nearbyDeviceId}|${nearbyPlatform}|${[...nearbyInvitationTargets].join(',')}|${sanitizeName(name)}`;
 
   function decodeNearbyEndpoint<T extends NearbyEndpoint>(endpoint: T): T {
-    const match = /^tiles6\|([0-9a-f]{6})\|([0-9a-f]{8})\|(.+)$/i.exec(endpoint.name);
+    const match = /^tiles7\|([0-9a-f]{6})\|([0-9a-f]{8})\|([ia])\|([0-9a-f,]*)\|(.+)$/i.exec(endpoint.name);
     if (!match) return endpoint;
     return {
       ...endpoint,
-      name: sanitizeName(match[3]),
+      name: sanitizeName(match[5]),
       color: sanitizePlayerColor(`#${match[1].toLowerCase()}`),
       deviceId: match[2].toLowerCase(),
+      platform: match[3].toLowerCase() === 'i' ? 'ios' : 'android',
+      inviteDeviceIds: match[4] ? match[4].toLowerCase().split(',') : [],
     };
+  }
+
+  function shouldRequestNearbyConnection(endpoint: NearbyEndpoint): boolean {
+    return !(Capacitor.getPlatform() === 'android' && endpoint.platform === 'ios');
+  }
+
+  async function advertiseNearbyInvitations(): Promise<void> {
+    await NearbyConnections.stopAdvertising().catch(() => undefined);
+    await NearbyConnections.startAdvertising({ name: nearbyWireName() });
+  }
+
+  function consumeNearbyInvitation(endpoint: NearbyEndpoint): void {
+    const normalizedName = endpoint.name.trim().toLocaleLowerCase();
+    for (const [endpointId, invite] of nearbyInviteStates) {
+      const sameDevice = endpoint.deviceId && invite.deviceId === endpoint.deviceId;
+      const sameName = invite.name.trim().toLocaleLowerCase() === normalizedName;
+      if (endpointId !== endpoint.endpointId && !sameDevice && !sameName) continue;
+      nearbyInviteStates.delete(endpointId);
+      outgoingNearbyInvites.delete(endpointId);
+    }
+    if (endpoint.deviceId) nearbyInvitationTargets.delete(endpoint.deviceId);
   }
 
   function colorForPlayer(player: PlayerSummary | undefined, index = 0): string {
@@ -761,7 +787,6 @@ export function createTiles(root: HTMLElement): void {
     if (message.t === 'welcome') {
       nearbyAwaitingWelcome = false;
       clearNearbyHelloTimer();
-      clearNearbyLobbyConnectTimer();
       myId = message.id;
       viewingPlayerId ??= myId;
       if (message.resumeToken) localStorage.setItem(sessionKey(), message.resumeToken);
@@ -971,19 +996,9 @@ export function createTiles(root: HTMLElement): void {
     nearbyReconnectTimer = null;
   }
 
-  function clearNearbyConnectionAttemptTimer(): void {
-    if (nearbyConnectionAttemptTimer != null) window.clearTimeout(nearbyConnectionAttemptTimer);
-    nearbyConnectionAttemptTimer = null;
-  }
-
   function clearNearbyHelloTimer(): void {
     if (nearbyHelloTimer != null) window.clearTimeout(nearbyHelloTimer);
     nearbyHelloTimer = null;
-  }
-
-  function clearNearbyLobbyConnectTimer(): void {
-    if (nearbyLobbyConnectTimer != null) window.clearTimeout(nearbyLobbyConnectTimer);
-    nearbyLobbyConnectTimer = null;
   }
 
   function clearNearbyHomeRefreshTimer(invalidate = true): void {
@@ -1213,7 +1228,6 @@ export function createTiles(root: HTMLElement): void {
     }
     clearNearbyHelloTimer();
     nearbyAwaitingWelcome = false;
-    clearNearbyConnectionAttemptTimer();
     nearbyHostId = null;
     transportSend = null;
     nearbyAutoReconnect = true;
@@ -1235,42 +1249,6 @@ export function createTiles(root: HTMLElement): void {
     chatInput.disabled = true;
     chatSend.disabled = true;
     lobbyHelp.textContent = 'Only the host can start the game.';
-    if (nearbyLobbyConnectTimer == null) {
-      nearbyLobbyConnectTimer = window.setTimeout(() => {
-        nearbyLobbyConnectTimer = null;
-        if (connectionMode !== 'nearby-join' || state) return;
-        const endpointId = nearbyHostId ?? nearbyConnectingId;
-        if (!nearbyTriedReverseRoute && nearbyConnectingId) {
-          diagnose('nearby-route-reversal', { hostName: nearbyHostName || hostName, endpointId });
-          clearNearbyHelloTimer();
-          clearNearbyConnectionAttemptTimer();
-          clearNearbyReconnectTimer();
-          nearbyAwaitingWelcome = false;
-          nearbyTriedReverseRoute = true;
-          nearbyAutoReconnect = true;
-          nearbyHostId = null;
-          nearbyConnectingId = null;
-          transportSend = null;
-          if (endpointId) void NearbyConnections.disconnect({ endpointId }).catch(() => undefined);
-          showNearbyLobbyLoading(nearbyHostName || hostName, 'Switching connection route…');
-          setNearbyPeerState(nearbyHostName || hostName, 'searching', 'First route unavailable · trying reverse connection automatically');
-          scheduleNearbyTransport(0);
-          return;
-        }
-        diagnose('nearby-lobby-connect-timeout', { hostName: nearbyHostName || hostName, endpointId });
-        clearNearbyHelloTimer();
-        clearNearbyConnectionAttemptTimer();
-        clearNearbyReconnectTimer();
-        nearbyAwaitingWelcome = false;
-        nearbyAutoReconnect = false;
-        nearbyHostId = null;
-        nearbyConnectingId = null;
-        transportSend = null;
-        if (endpointId) void NearbyConnections.disconnect({ endpointId }).catch(() => undefined);
-        roster.innerHTML = '<li class="is-loading">Secure connection timed out.</li>';
-        connectionLost('Secure connection timed out after 10 seconds. Tap Retry to try again.');
-      }, nearbyTriedReverseRoute ? 10_000 : 6_000);
-    }
   }
 
   function sendNearbyHello(): void {
@@ -1462,13 +1440,23 @@ export function createTiles(root: HTMLElement): void {
     pendingReinviteNames.delete(playerName.trim().toLocaleLowerCase());
     approvedNearbyNames.add(playerName.trim().toLocaleLowerCase());
     outgoingNearbyInvites.add(endpoint.endpointId);
-    nearbyInviteStates.set(endpoint.endpointId, { name: playerName, status: 'requested' });
+    nearbyInviteStates.set(endpoint.endpointId, {
+      name: playerName,
+      status: 'requested',
+      deviceId: endpoint.deviceId,
+    });
     setNearbyPeerState(playerName, 'requesting', 'Found endpoint · requesting Nearby connection');
     if (state) {
       renderLobbyRoster(state);
       renderPlayerDisconnect(state);
     }
     try {
+      if (!shouldRequestNearbyConnection(endpoint) && endpoint.deviceId) {
+        nearbyInvitationTargets.add(endpoint.deviceId);
+        await advertiseNearbyInvitations();
+        setNearbyPeerState(playerName, 'requested', 'Game request advertised · waiting for player response');
+        return;
+      }
       await NearbyConnections.stopDiscovery().catch(() => undefined);
       await NearbyConnections.stopAdvertising().catch(() => undefined);
       await NearbyConnections.requestConnection({ endpointId: endpoint.endpointId, name: nearbyWireName() });
@@ -1602,7 +1590,6 @@ export function createTiles(root: HTMLElement): void {
         nearbyHostName = invitation.name;
         nearbyConnectingId = invitation.endpointId;
         nearbyAutoReconnect = true;
-        nearbyTriedReverseRoute = false;
         showNearbyLobbyLoading(invitation.name);
         // Home mode deliberately advertises and discovers at the same time.
         // Quiesce both roles before accepting the verification so iOS does not
@@ -1613,10 +1600,13 @@ export function createTiles(root: HTMLElement): void {
         ]);
       }
       await NearbyConnections.acceptVerification({ endpointId: invitation.endpointId, accept });
+      if (!accept) {
+        nearbyConnectingId = null;
+        nearbyHostName = '';
+      }
       nearbyStatus.textContent = accept ? `Joining ${invitation.name}'s game…` : `Declined ${invitation.name}'s game.`;
     } catch {
       if (accept) {
-        clearNearbyLobbyConnectTimer();
         connectionMode = 'nearby-home';
         nearbyConnectingId = null;
         nearbyAutoReconnect = false;
@@ -1639,6 +1629,7 @@ export function createTiles(root: HTMLElement): void {
     nearbyHomeStarting = true;
     nearbyName = name;
     connectionMode = 'nearby-home';
+    nearbyInvitationTargets.clear();
     clearNearbyHomeRefreshTimer();
     const generation = nearbyHomeGeneration;
     nearbyHomePhase = 'permission';
@@ -1698,7 +1689,6 @@ export function createTiles(root: HTMLElement): void {
     clearNearbyHomeRefreshTimer();
     connectionMode = 'nearby-join';
     clearNearbyReconnectTimer();
-    clearNearbyConnectionAttemptTimer();
     nearbyReconnectAttempt = 0;
     nearbyAutoReconnect = false;
     nearbyConnectingId = null;
@@ -1719,7 +1709,6 @@ export function createTiles(root: HTMLElement): void {
     localStorage.setItem(LOCAL_HOST_AUTO_RESTORE_KEY, '1');
     clearNearbyHomeRefreshTimer();
     clearNearbyReconnectTimer();
-    clearNearbyConnectionAttemptTimer();
     clearNearbyHelloTimer();
     clearAllNearbyChannels();
     connectionMode = 'nearby-host';
@@ -1763,7 +1752,7 @@ export function createTiles(root: HTMLElement): void {
     nearbyPermissionAliases = 'permissionAliases' in availability ? availability.permissionAliases : undefined;
     nearbyEntry.hidden = false;
 
-    await NearbyConnections.addListener('endpointFound', rawEndpoint => {
+    await NearbyConnections.addListener('endpointFound', async rawEndpoint => {
       const endpoint = decodeNearbyEndpoint(rawEndpoint);
       const lossTimer = nearbyEndpointLossTimers.get(endpoint.endpointId);
       if (lossTimer != null) window.clearTimeout(lossTimer);
@@ -1784,6 +1773,21 @@ export function createTiles(root: HTMLElement): void {
       nearbyEndpointMap.set(endpoint.endpointId, endpoint);
       if (connectionMode === 'nearby-home' && isNew) selectedNearbyIds.add(endpoint.endpointId);
       renderNearbyEndpoints();
+      if (connectionMode === 'nearby-home'
+        && endpoint.inviteDeviceIds?.includes(nearbyDeviceId)
+        && !nearbyConnectingId
+        && !pendingNearbyInvite) {
+        nearbyConnectingId = endpoint.endpointId;
+        nearbyHostName = endpoint.name;
+        setNearbyPeerState(endpoint.name, 'requesting', 'Game request found · opening secure connection');
+        try {
+          await NearbyConnections.requestConnection({ endpointId: endpoint.endpointId, name: nearbyWireName() });
+          setNearbyPeerState(endpoint.name, 'requested', 'Game request received · waiting for approval');
+        } catch (error) {
+          nearbyConnectingId = null;
+          setNearbyPeerState(endpoint.name, 'failed', `Could not open game request · ${nearbyErrorDetail(error)}`);
+        }
+      }
       dispatchPendingReinvites();
       if (state && connectionMode === 'nearby-host') {
         renderLobbyRoster(state);
@@ -1797,21 +1801,12 @@ export function createTiles(root: HTMLElement): void {
         nearbyConnectingId = endpoint.endpointId;
         setNearbyPeerState(endpoint.name, 'requesting', 'Endpoint found · requesting Nearby reconnection');
         nearbyStatus.textContent = `Reconnecting to ${endpoint.name}…`;
-        clearNearbyConnectionAttemptTimer();
-        nearbyConnectionAttemptTimer = window.setTimeout(() => {
-          if (nearbyConnectingId !== endpoint.endpointId || nearbyHostId) return;
-          setNearbyPeerState(endpoint.name, 'failed', 'Connection timed out · restarting discovery');
-          nearbyConnectingId = null;
-          void NearbyConnections.disconnect({ endpointId: endpoint.endpointId }).catch(() => undefined);
-          scheduleNearbyTransport(0);
-        }, 12_000);
         void Promise.all([
           NearbyConnections.stopDiscovery().catch(() => undefined),
           NearbyConnections.stopAdvertising().catch(() => undefined),
         ]).then(() => NearbyConnections.requestConnection({ endpointId: endpoint.endpointId, name: nearbyWireName() }))
           .then(() => setNearbyPeerState(endpoint.name, 'requested', 'Reconnect queued · waiting for secure handshake'))
           .catch(error => {
-            clearNearbyConnectionAttemptTimer();
             setNearbyPeerState(endpoint.name, 'failed', `Reconnect failed · ${nearbyErrorDetail(error)}`);
             nearbyConnectingId = null;
             scheduleNearbyTransport();
@@ -1887,7 +1882,6 @@ export function createTiles(root: HTMLElement): void {
     });
     await NearbyConnections.addListener('connected', async rawEndpoint => {
       const endpoint = decodeNearbyEndpoint(rawEndpoint);
-      clearNearbyConnectionAttemptTimer();
       clearNearbyChannel(endpoint.endpointId);
       connectionRestored();
       setNearbyPeerState(endpoint.name, 'transport', 'Nearby transport connected · waiting for app handshake');
@@ -1895,16 +1889,17 @@ export function createTiles(root: HTMLElement): void {
         const invite = nearbyInviteStates.get(endpoint.endpointId);
         if (invite) invite.status = 'accepted';
         localHost.setConnectionStatus(endpoint.endpointId, 'accepted');
-        outgoingNearbyInvites.delete(endpoint.endpointId);
+        const invitationTargetsChanged = !!endpoint.deviceId && nearbyInvitationTargets.has(endpoint.deviceId);
+        consumeNearbyInvitation(endpoint);
         if (state) {
           renderLobbyRoster(state);
           renderPlayerDisconnect(state);
         }
-        if (outgoingNearbyInvites.size === 0) {
+        if (outgoingNearbyInvites.size === 0 || invitationTargetsChanged) {
           await NearbyConnections.stopDiscovery().catch(error => {
             diagnose('nearby-host-stop-discovery-failed', nearbyErrorDetail(error));
           });
-          await NearbyConnections.startAdvertising({ name: nearbyWireName() }).catch(error => {
+          await advertiseNearbyInvitations().catch(error => {
             diagnose('nearby-host-advertising-restart-failed', nearbyErrorDetail(error));
           });
         }
@@ -1935,9 +1930,6 @@ export function createTiles(root: HTMLElement): void {
     });
     await NearbyConnections.addListener('disconnected', rawEndpoint => {
       const endpoint = decodeNearbyEndpoint(rawEndpoint);
-      if (nearbyConnectingId === endpoint.endpointId || nearbyHostId === endpoint.endpointId) {
-        clearNearbyConnectionAttemptTimer();
-      }
       clearNearbyChannel(endpoint.endpointId);
       setNearbyPeerState(endpoint.name, 'disconnected', 'Nearby transport disconnected · retry required');
       if (connectionMode === 'nearby-host' && localHost) {
@@ -1947,12 +1939,12 @@ export function createTiles(root: HTMLElement): void {
         nearbyInviteStates.delete(endpoint.endpointId);
         selectedNearbyIds.delete(endpoint.endpointId);
         if (pendingInvite) {
-          setNearbyPeerState(endpoint.name, 'searching', 'First route unavailable · waiting for reverse connection');
+          setNearbyPeerState(endpoint.name, 'failed', 'Nearby connection failed · invite can be retried');
           if (state) {
             renderLobbyRoster(state);
             renderPlayerDisconnect(state);
           }
-          show(`${endpoint.name} is switching connection route…`, 'good');
+          show(`${endpoint.name} could not be invited.`, 'bad');
           if (outgoingNearbyInvites.size === 0) scheduleNearbyTransport(0);
           return;
         }
@@ -1964,16 +1956,10 @@ export function createTiles(root: HTMLElement): void {
       else if (nearbyHostId === endpoint.endpointId) {
         beginNearbyReconnect();
       } else if (nearbyConnectingId === endpoint.endpointId) {
-        // Cross-platform BLE can fail when Android initiated the connection to
-        // an advertising iPhone, while the reverse direction succeeds. Treat
-        // that native rejection as part of the same join attempt: make this
-        // device discover the host and request the replacement connection.
-        clearNearbyLobbyConnectTimer();
         nearbyConnectingId = null;
         nearbyAutoReconnect = true;
-        nearbyTriedReverseRoute = true;
-        showNearbyLobbyLoading(nearbyHostName || endpoint.name, 'Switching connection route…');
-        setNearbyPeerState(endpoint.name, 'searching', 'First route unavailable · trying reverse connection automatically');
+        showNearbyLobbyLoading(nearbyHostName || endpoint.name, 'Connection interrupted · finding host again…');
+        setNearbyPeerState(endpoint.name, 'searching', 'Connection interrupted · restarting discovery');
         scheduleNearbyTransport(0);
       }
     });
@@ -1991,6 +1977,12 @@ export function createTiles(root: HTMLElement): void {
     const invitedEndpointNames = new Map(inviteIds.map(endpointId => [
       endpointId, invitedEndpoints.get(endpointId)?.name ?? 'Nearby player',
     ]));
+    nearbyInvitationTargets.clear();
+    for (const endpoint of invitedEndpoints.values()) {
+      if (endpoint?.deviceId && !shouldRequestNearbyConnection(endpoint)) {
+        nearbyInvitationTargets.add(endpoint.deviceId);
+      }
+    }
     // Claim the transport synchronously, before the first await. Otherwise a
     // queued home/profile refresh can call stop() while invitations are being
     // sent and invalidate every selected endpoint.
@@ -2013,6 +2005,9 @@ export function createTiles(root: HTMLElement): void {
         await NearbyConnections.stopDiscovery().catch(() => undefined);
         await NearbyConnections.stopAdvertising().catch(() => undefined);
         await wait(300);
+        if (nearbyInvitationTargets.size) {
+          await NearbyConnections.startAdvertising({ name: nearbyWireName(name) });
+        }
       } else {
         await NearbyConnections.startAdvertising({ name: nearbyWireName(name) });
       }
@@ -2056,8 +2051,15 @@ export function createTiles(root: HTMLElement): void {
         nearbyInviteStates.set(endpointId, {
           name: endpointName,
           status: 'requested',
+          deviceId: invitedEndpoints.get(endpointId)?.deviceId,
         });
-        setNearbyPeerState(endpointName, 'requesting', 'Endpoint selected · requesting Nearby connection');
+        setNearbyPeerState(
+          endpointName,
+          'requesting',
+          shouldRequestNearbyConnection(invitedEndpoints.get(endpointId) ?? { endpointId, name: endpointName })
+            ? 'Endpoint selected · requesting Nearby connection'
+            : 'Game request advertised · waiting for player response',
+        );
       }
       const resumeToken = restored ? localStorage.getItem(sessionKey()) ?? undefined : undefined;
       localHost.receive(localPeerId, {
@@ -2073,7 +2075,9 @@ export function createTiles(root: HTMLElement): void {
         );
       }
       for (const [index, endpointId] of inviteIds.entries()) {
+        const endpoint = invitedEndpoints.get(endpointId);
         const endpointName = invitedEndpointNames.get(endpointId) ?? 'Nearby player';
+        if (endpoint && !shouldRequestNearbyConnection(endpoint)) continue;
         try {
           await NearbyConnections.requestConnection({ endpointId, name: nearbyWireName(name) });
           setNearbyPeerState(endpointName, 'requested', 'Request queued · waiting for secure handshake');
@@ -2124,7 +2128,6 @@ export function createTiles(root: HTMLElement): void {
         nearbyAutoReconnect = true;
         nearbyConnectingId = null;
         nearbyReconnectAttempt = 0;
-        nearbyTriedReverseRoute = true;
         roomName = 'nearby';
         nameInput.value = name;
         localStorage.setItem('tiles-name', name);
@@ -3554,22 +3557,20 @@ export function createTiles(root: HTMLElement): void {
     connectionMode = null;
     stopOnlineTransport();
     clearNearbyReconnectTimer();
-    clearNearbyConnectionAttemptTimer();
     clearNearbyHelloTimer();
-    clearNearbyLobbyConnectTimer();
     clearNearbyHomeRefreshTimer();
     clearAllNearbyChannels();
     transportSend = null;
     localHost = null;
     nearbyInviteStates.clear();
     outgoingNearbyInvites.clear();
+    nearbyInvitationTargets.clear();
     approvedNearbyNames.clear();
     pendingReinviteNames.clear();
     nearbyHostId = null;
     nearbyHostName = '';
     nearbyAutoReconnect = false;
     nearbyConnectingId = null;
-    nearbyTriedReverseRoute = false;
     state = null;
     connectionRestored();
     if (isNativeNearby()) await NearbyConnections.stop().catch(() => undefined);
@@ -3617,7 +3618,6 @@ export function createTiles(root: HTMLElement): void {
       return;
     }
     if (connectionMode === 'nearby-join') {
-      nearbyTriedReverseRoute = true;
       showNearbyLobbyLoading(nearbyHostName || 'host', `Finding ${nearbyHostName || 'host'} nearby…`);
       lobbyConnectionNotice.hidden = true;
       connectionMessage.textContent = 'Reconnecting to the nearby host…';

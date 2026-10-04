@@ -1,6 +1,13 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core';
 
-export interface NearbyEndpoint { endpointId: string; name: string; color?: string; deviceId?: string }
+export interface NearbyEndpoint {
+  endpointId: string;
+  name: string;
+  color?: string;
+  deviceId?: string;
+  platform?: 'ios' | 'android';
+  inviteDeviceIds?: string[];
+}
 export interface NearbyVerification extends NearbyEndpoint { code: string }
 export interface NearbyPayload extends NearbyEndpoint { payload: string }
 
