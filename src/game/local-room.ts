@@ -172,6 +172,35 @@ export class LocalRoomHost {
     this.changed();
   }
 
+  reserve(peerId: string, rawName: string, rawColor?: string, rawDeviceId?: string): void {
+    if (this.phase !== 'lobby' || this.players.length >= MAX_PLAYERS) return;
+    const deviceId = typeof rawDeviceId === 'string' && /^[a-f0-9]{8}$/.test(rawDeviceId)
+      ? rawDeviceId
+      : undefined;
+    if (this.players.some(player => player.id === peerId || (deviceId && player.deviceId === deviceId))) return;
+    const name = sanitizeName(rawName);
+    if (!name) return;
+    const existing = new Set(this.players.map(player => player.name.toLocaleLowerCase()));
+    let unique = name;
+    let suffix = 2;
+    while (existing.has(unique.toLocaleLowerCase())) unique = `${name.slice(0, 15)} ${suffix++}`;
+    this.players.push({
+      id: peerId,
+      name: unique,
+      color: sanitizePlayerColor(rawColor),
+      resumeToken: crypto.randomUUID(),
+      deviceId,
+      connected: false,
+      hand: [],
+      board: [],
+      eliminated: false,
+      voted: false,
+    });
+    this.heartbeatStatus.set(peerId, { status: 'unavailable', at: Date.now() });
+    this.broadcastRoom();
+    this.changed();
+  }
+
   exportState(): StoredLocalRoom {
     return {
       version: 1,
