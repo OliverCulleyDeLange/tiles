@@ -1353,11 +1353,25 @@ export function createTiles(root: HTMLElement): void {
     const playerNames = new Set(room.players.map(player => player.name.trim().toLocaleLowerCase()));
     const playerRows = room.players.map((player, index) => {
       const inviteStatus = nearbyInviteStates.get(player.id)?.status;
-      const status = player.id === room.hostId ? 'Host' : inviteStatus ?? '';
-      const availability = heartbeatAvailability(player);
+      const connectionStatus = player.connectionStatus ?? inviteStatus;
+      const status = player.id === room.hostId ? 'Host' : connectionStatus ?? '';
+      const pending = connectionStatus === 'requested' || connectionStatus === 'received' || connectionStatus === 'accepted';
+      const availability = pending
+        ? {
+            status: 'checking' as const,
+            text: connectionStatus === 'requested' ? 'Waiting for response'
+              : connectionStatus === 'received' ? 'Invitation received'
+              : 'Joining lobby…',
+          }
+        : connectionStatus === 'disconnected'
+          ? { status: 'checking' as const, text: 'Waiting to reconnect…' }
+        : heartbeatAvailability(player);
       const color = colorForPlayer(player, index);
-      const graph = player.id === room.hostId ? '' : heartbeatGraph(player.id, availability.status === 'unavailable' || availability.status === 'disconnected');
-      return `<li class="player-roster-card" style="--owner-color:${color}"><span class="presence ${player.connected === false ? 'is-offline' : ''}" aria-hidden="true"></span><span class="roster-player"><strong>${escapeHtml(player.name)}</strong><small class="player-availability ${availability.status}">${escapeHtml(availability.text)}</small></span>${graph}${status ? `<em class="invite-state ${status.toLowerCase()}">${status}</em>` : ''}</li>`;
+      const graph = player.id === room.hostId || pending || player.connected === false
+        ? ''
+        : heartbeatGraph(player.id, availability.status === 'unavailable');
+      const presenceClass = pending ? 'invite-pending' : player.connected === false ? 'is-offline' : '';
+      return `<li class="player-roster-card" style="--owner-color:${color}"><span class="presence ${presenceClass}" aria-hidden="true"></span><span class="roster-player"><strong>${escapeHtml(player.name)}</strong><small class="player-availability ${availability.status}">${escapeHtml(availability.text)}</small></span>${graph}${status ? `<em class="invite-state ${status.toLowerCase()}">${status}</em>` : ''}</li>`;
     });
     const inviteRows = connectionMode === 'nearby-host'
       ? [...nearbyInviteStates.values()]
@@ -1804,6 +1818,7 @@ export function createTiles(root: HTMLElement): void {
       if (connectionMode === 'nearby-host' && (outgoingNearbyInvites.has(verification.endpointId) || returningPlayer || approvedPlayer)) {
         const invite = nearbyInviteStates.get(verification.endpointId);
         if (invite) invite.status = 'received';
+        localHost?.setConnectionStatus(verification.endpointId, 'received');
         if (state) {
           renderLobbyRoster(state);
           renderPlayerDisconnect(state);
@@ -1827,6 +1842,7 @@ export function createTiles(root: HTMLElement): void {
       if (localHost) {
         const invite = nearbyInviteStates.get(endpoint.endpointId);
         if (invite) invite.status = 'accepted';
+        localHost.setConnectionStatus(endpoint.endpointId, 'accepted');
         outgoingNearbyInvites.delete(endpoint.endpointId);
         if (state) {
           renderLobbyRoster(state);

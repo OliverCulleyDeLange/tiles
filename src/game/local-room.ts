@@ -24,6 +24,7 @@ interface LocalPlayer {
   resumeToken: string;
   deviceId?: string;
   connected: boolean;
+  connectionStatus?: PlayerSummary['connectionStatus'];
   hand: Tile[];
   board: PlacedTile[];
   eliminated: boolean;
@@ -84,7 +85,9 @@ export class LocalRoomHost {
     this.resumePhase = restored.resumePhase ?? (restored.phase === 'lobby' ? undefined : restored.phase);
     this.phase = this.resumePhase ? 'lobby' : restored.phase;
     this.hostId = restored.hostId;
-    this.players = restored.players.map(player => ({ ...player, connected: false, hand: [...player.hand], board: [...player.board] }));
+    this.players = restored.players.map(player => ({
+      ...player, connected: false, connectionStatus: 'disconnected', hand: [...player.hand], board: [...player.board],
+    }));
     this.bag = [...restored.bag];
     this.peel = restored.peel;
     this.dumps = restored.dumps ?? 0;
@@ -166,6 +169,7 @@ export class LocalRoomHost {
     const index = this.players.findIndex(value => value.id === peerId);
     if (index < 0) return;
     this.players[index].connected = false;
+    this.players[index].connectionStatus = 'disconnected';
     this.heartbeatPending.delete(peerId);
     this.heartbeatStatus.set(peerId, { status: 'unavailable', at: Date.now() });
     this.broadcastRoom();
@@ -191,12 +195,21 @@ export class LocalRoomHost {
       resumeToken: crypto.randomUUID(),
       deviceId,
       connected: false,
+      connectionStatus: 'requested',
       hand: [],
       board: [],
       eliminated: false,
       voted: false,
     });
     this.heartbeatStatus.set(peerId, { status: 'unavailable', at: Date.now() });
+    this.broadcastRoom();
+    this.changed();
+  }
+
+  setConnectionStatus(peerId: string, status: 'received' | 'accepted'): void {
+    const player = this.players.find(value => value.id === peerId);
+    if (!player || player.connected) return;
+    player.connectionStatus = status;
     this.broadcastRoom();
     this.changed();
   }
@@ -233,6 +246,7 @@ export class LocalRoomHost {
     const existingPeer = this.players.find(player => player.id === peerId);
     if (existingPeer) {
       existingPeer.connected = true;
+      existingPeer.connectionStatus = undefined;
       existingPeer.color = color;
       this.heartbeatStatus.set(peerId, { status: 'checking', at: Date.now() });
       this.deliver(peerId, { t: 'welcome', id: peerId, resumeToken: existingPeer.resumeToken, room: this.snapshot() });
@@ -253,6 +267,7 @@ export class LocalRoomHost {
       const previousId = resuming.id;
       resuming.id = peerId;
       resuming.connected = true;
+      resuming.connectionStatus = undefined;
       resuming.color = color;
       if (deviceId) resuming.deviceId = deviceId;
       this.heartbeatPending.delete(previousId);
@@ -451,6 +466,7 @@ export class LocalRoomHost {
     const players: PlayerSummary[] = this.players.map((player, index) => ({
       id: player.id, name: player.name, color: sanitizePlayerColor(player.color), tilesLeft: looseTileCount(player.hand, player.board),
       tiles: player.hand, board: player.board, area: areas[index], connected: player.connected ? undefined : false,
+      connectionStatus: player.connectionStatus,
       eliminated: player.eliminated || undefined,
     }));
     return {

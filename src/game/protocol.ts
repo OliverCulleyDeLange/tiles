@@ -34,6 +34,7 @@ export interface PlayerSummary {
   name: string;
   color?: string;
   connected?: boolean;
+  connectionStatus?: 'requested' | 'received' | 'accepted' | 'disconnected';
   tilesLeft: number;
   tiles: Tile[];
   board: PlacedTile[];
