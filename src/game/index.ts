@@ -204,6 +204,7 @@ export function createTiles(root: HTMLElement): void {
   const nearbyReceiveBuffers = new Map<string, Map<number, ClientMessage | ServerMessage>>();
   const pendingNearbyPackets = new Map<string, PendingNearbyPacket>();
   let nearbyHomeStarting = false;
+  let nearbyHomeRestart: Promise<void> | null = null;
   let nearbyHomePhase: 'idle' | 'permission' | 'permission-required' | 'starting' | 'visible' | 'searching' | 'failed' = 'idle';
   let nearbySuspended = false;
   let pendingNearbyInvite: NearbyVerification | null = null;
@@ -1586,6 +1587,31 @@ export function createTiles(root: HTMLElement): void {
     }
   }
 
+  function restartNearbyHome(): Promise<void> {
+    if (nearbyHomeRestart) return nearbyHomeRestart;
+    nearbyHomeRestart = (async () => {
+      nearbyHomeStarting = true;
+      nearbyHomePhase = 'starting';
+      clearNearbyHomeRefreshTimer();
+      connectionMode = null;
+      nearbyStatus.textContent = 'Restarting nearby radios…';
+      renderNearbyEndpoints();
+      await NearbyConnections.stop().catch(error => diagnose('nearby-home-stop-failed', nearbyErrorDetail(error)));
+      // Google Play Services tears its Nearby client down asynchronously after
+      // stop() resolves. Do not expose stale endpoint IDs during that window.
+      await wait(350);
+      nearbyEndpointMap.clear();
+      selectedNearbyIds.clear();
+      nearbyHomeStarting = false;
+      await startNearbyHome();
+    })().finally(() => {
+      nearbyHomeRestart = null;
+      nearbyHomeStarting = false;
+      renderNearbyEndpoints();
+    });
+    return nearbyHomeRestart;
+  }
+
   function enterNearbyGuest(endpoint: NearbyEndpoint): void {
     clearNearbyHomeRefreshTimer();
     connectionMode = 'nearby-join';
@@ -1855,12 +1881,15 @@ export function createTiles(root: HTMLElement): void {
       endpointId,
       nearbyEndpointMap.get(endpointId)?.name ?? 'Nearby player',
     ]));
+    // Claim the transport synchronously, before the first await. Otherwise a
+    // queued home/profile refresh can call stop() while invitations are being
+    // sent and invalidate every selected endpoint.
+    clearNearbyHomeRefreshTimer();
+    connectionMode = 'nearby-host';
+    nearbyName = name;
     try {
       await requestNearbyPermissions();
-      clearNearbyHomeRefreshTimer();
       clearAllNearbyChannels();
-      connectionMode = 'nearby-host';
-      nearbyName = name;
       nearbyAutoReconnect = false;
       nearbyConnectingId = null;
       nearbyReconnectAttempt = 0;
@@ -1873,6 +1902,7 @@ export function createTiles(root: HTMLElement): void {
         // advertising so the radio can concentrate on outgoing handshakes.
         await NearbyConnections.stopDiscovery().catch(() => undefined);
         await NearbyConnections.stopAdvertising().catch(() => undefined);
+        await wait(300);
       } else {
         await NearbyConnections.startAdvertising({ name: nearbyWireName(name) });
       }
@@ -1921,18 +1951,22 @@ export function createTiles(root: HTMLElement): void {
       }
       const resumeToken = restored ? localStorage.getItem(sessionKey()) ?? undefined : undefined;
       localHost.receive(localPeerId, { t: 'hello', v: PROTOCOL_VERSION, name, color: selectedPlayerColor(), resumeToken });
-      for (const endpointId of inviteIds) {
+      for (const [index, endpointId] of inviteIds.entries()) {
         const endpointName = invitedEndpointNames.get(endpointId) ?? 'Nearby player';
-        void NearbyConnections.requestConnection({ endpointId, name: nearbyWireName(name) })
-          .then(() => setNearbyPeerState(endpointName, 'requested', 'Request queued · waiting for secure handshake'))
-          .catch(error => {
-            nearbyInviteStates.delete(endpointId);
-            outgoingNearbyInvites.delete(endpointId);
-            setNearbyPeerState(endpointName, 'failed', `Connection request failed · ${nearbyErrorDetail(error)}`);
-            if (outgoingNearbyInvites.size === 0) scheduleNearbyTransport(0);
-            if (state) renderLobbyRoster(state);
-            show('One nearby player could not be invited.', 'bad');
-          });
+        try {
+          await NearbyConnections.requestConnection({ endpointId, name: nearbyWireName(name) });
+          setNearbyPeerState(endpointName, 'requested', 'Request queued · waiting for secure handshake');
+        } catch (error) {
+          nearbyInviteStates.delete(endpointId);
+          outgoingNearbyInvites.delete(endpointId);
+          setNearbyPeerState(endpointName, 'failed', `Connection request failed · ${nearbyErrorDetail(error)}`);
+          if (outgoingNearbyInvites.size === 0) scheduleNearbyTransport(0);
+          if (state) renderLobbyRoster(state);
+          show(`${endpointName} could not be invited.`, 'bad');
+        }
+        // Avoid asking the BLE/Wi-Fi stack to establish several secure links
+        // in the same event-loop turn on larger local games.
+        if (index < inviteIds.length - 1) await wait(300);
       }
       show(restored ? 'Local game restored. Friends can rejoin now.' : 'Local lobby ready. Friends can discover you now.', 'good');
     } catch {
@@ -1942,6 +1976,7 @@ export function createTiles(root: HTMLElement): void {
   }
 
   async function startSelectedLocalGame(): Promise<void> {
+    if (nearbyHomeStarting || nearbyHomeRestart) return;
     const name = requireNearbyName();
     if (!name) return;
     const inviteIds = [...selectedNearbyIds];
@@ -3076,13 +3111,8 @@ export function createTiles(root: HTMLElement): void {
     const name = sanitizeName(nameInput.value);
     if (!name || state || !isNativeNearby()) return;
     localStorage.setItem('tiles-name', name);
-    if (connectionMode === 'nearby-home') {
-      connectionMode = null;
-      await NearbyConnections.stop().catch(() => undefined);
-      nearbyEndpointMap.clear();
-      selectedNearbyIds.clear();
-    }
-    void startNearbyHome();
+    if (connectionMode === 'nearby-home' || nearbyHomeRestart) await restartNearbyHome();
+    else void startNearbyHome();
   });
   dictionarySelect.addEventListener('change', () => {
     const dictionary = dictionarySelect.value as DictionaryId;
@@ -3505,10 +3535,7 @@ export function createTiles(root: HTMLElement): void {
     selectPlayerColor(color);
     localStorage.setItem('tiles-color', color);
     if (state?.phase === 'lobby') send({ t: 'color', color });
-    else if (connectionMode === 'nearby-home') {
-      clearNearbyHomeRefreshTimer();
-      void NearbyConnections.stop().then(() => startNearbyHome()).catch(() => undefined);
-    }
+    else if (connectionMode === 'nearby-home' || nearbyHomeRestart) void restartNearbyHome();
   }));
   initializeUpdates();
   void initializeNearby();
