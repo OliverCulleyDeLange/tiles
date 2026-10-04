@@ -37,6 +37,19 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
     private var isAdvertising = false
     private var isDiscovering = false
 
+    public override func load() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(appDidEnterBackground),
+            name: UIScene.didEnterBackgroundNotification,
+            object: nil
+        )
+    }
+
+    @objc private func appDidEnterBackground() {
+        stopNearbySession()
+    }
+
     @objc public func isAvailable(_ call: CAPPluginCall) { call.resolve(["available": true]) }
 
     @objc public override func requestPermissions(_ call: CAPPluginCall) {
@@ -141,6 +154,11 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc public func stop(_ call: CAPPluginCall) {
+        stopNearbySession()
+        call.resolve()
+    }
+
+    private func stopNearbySession() {
         isAdvertising = false
         isDiscovering = false
         advertiser?.stopAdvertising()
@@ -154,7 +172,6 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
         advertiser = nil
         discoverer = nil
         DispatchQueue.main.async { UIApplication.shared.isIdleTimerDisabled = false }
-        call.resolve()
     }
 
     private func endpoint(_ id: EndpointID) -> [String: Any] {

@@ -75,6 +75,7 @@ interface GameState {
   players: PlayerState[];
   bag: Tile[];
   peel: number;
+  dumps: number;
   dictionary: DictionaryId;
   winnerId?: string;
   claimantId?: string;
@@ -90,6 +91,11 @@ const DISTRIBUTION: Record<string, number> = {
 };
 
 const REVIEW_MS = 15_000;
+
+function looseTileCount(hand: Tile[], board: PlacedTile[]): number {
+  const placed = new Set(board.map(tile => tile.id));
+  return hand.reduce((count, tile) => count + (placed.has(tile.id) ? 0 : 1), 0);
+}
 
 export class TilesRoom extends DurableObject<Env> {
   private readonly budgets = new Map<WebSocket, { at: number; count: number }>();
@@ -235,6 +241,7 @@ export class TilesRoom extends DurableObject<Env> {
     game.phase = 'playing';
     game.bag = shuffledBag();
     game.peel = 0;
+    game.dumps = 0;
     game.winnerId = undefined;
     game.claimantId = undefined;
     game.reviewBoard = undefined;
@@ -287,15 +294,17 @@ export class TilesRoom extends DurableObject<Env> {
   private async peel(session: Session, message: Extract<ClientMessage, { t: 'peel' }>): Promise<void> {
     const game = await this.load();
     const player = game.players.find(value => value.id === session.id);
-    if (!player || player.eliminated || game.phase !== 'playing' || message.peel !== game.peel) return;
+    if (!player || player.eliminated || game.phase !== 'playing' || message.peel !== game.peel) {
+      return this.sendTo(session.id, { t: 'peel-result', peel: message.peel, accepted: false, reason: 'The game changed before that peel arrived.' });
+    }
     const board = sanitizeBoard(message.board, new Set(player.hand.map(tile => tile.id)));
-    if (!board) return this.sendTo(session.id, { t: 'toast', text: 'Your tiles must form one connected grid.', tone: 'bad' });
+    if (!board) return this.sendTo(session.id, { t: 'peel-result', peel: message.peel, accepted: false, reason: 'Your tiles must form one connected grid.' });
     const occupied = new Set(game.players
       .filter(value => value.id !== player.id)
       .flatMap(value => value.board ?? [])
       .map(tile => `${tile.x},${tile.y}`));
     if (board.some(tile => occupied.has(`${tile.x},${tile.y}`))) {
-      return this.sendTo(session.id, { t: 'toast', text: 'Your grid overlaps another player.', tone: 'bad' });
+      return this.sendTo(session.id, { t: 'peel-result', peel: message.peel, accepted: false, reason: 'Your grid overlaps another player.' });
     }
     player.board = board;
     const active = game.players.filter(value => !value.eliminated);
@@ -306,11 +315,13 @@ export class TilesRoom extends DurableObject<Env> {
       game.reviewBoard = undefined;
       game.reviewEndsAt = undefined;
       await this.save(game);
+      this.sendTo(session.id, { t: 'peel-result', peel: message.peel, accepted: true });
       this.broadcast({ t: 'toast', text: `${player.name} is Top Banana!`, tone: 'good' });
       this.broadcastRoom(game);
       return;
     }
     game.peel++;
+    this.sendTo(session.id, { t: 'peel-result', peel: message.peel, accepted: true });
     for (const candidate of active) {
       const drawn = game.bag.pop();
       if (!drawn) continue;
@@ -331,10 +342,12 @@ export class TilesRoom extends DurableObject<Env> {
     if (game.bag.length < 3) return this.sendTo(session.id, { t: 'toast', text: 'Fewer than three tiles remain. You cannot dump.', tone: 'bad' });
     const [returned] = player.hand.splice(index, 1);
     player.board = (player.board ?? []).filter(tile => tile.id !== returned.id);
-    game.bag.push(returned);
     shuffle(game.bag);
     const drawn = game.bag.splice(-3);
     player.hand.push(...drawn);
+    game.bag.push(returned);
+    shuffle(game.bag);
+    game.dumps = (game.dumps ?? 0) + 1;
     await this.save(game);
     this.sendTo(player.id, { t: 'hand', tiles: player.hand, replace: true });
     this.sendTo(player.id, { t: 'toast', text: `Dumped ${returned.letter}. Three new tiles.`, tone: 'plain' });
@@ -414,7 +427,7 @@ export class TilesRoom extends DurableObject<Env> {
       id: player.id,
       name: player.name,
       connected: player.connected !== false,
-      tilesLeft: player.hand.length - (player.board?.length ?? 0),
+      tilesLeft: looseTileCount(player.hand, player.board ?? []),
       tiles: player.hand,
       board: player.board ?? [],
       area: player.area,
@@ -426,6 +439,7 @@ export class TilesRoom extends DurableObject<Env> {
       players,
       bunch: game.bag.length,
       peel: game.peel,
+      dumps: game.dumps ?? 0,
       dictionary: game.dictionary ?? 'scowl-gb',
       winnerId: game.winnerId,
       claimantId: game.claimantId,
@@ -436,7 +450,7 @@ export class TilesRoom extends DurableObject<Env> {
 
   private async load(): Promise<GameState> {
     return (await this.ctx.storage.get<GameState>('game')) ?? {
-      phase: 'lobby', hostId: '', players: [], bag: [], peel: 0, dictionary: 'scowl-gb',
+      phase: 'lobby', hostId: '', players: [], bag: [], peel: 0, dumps: 0, dictionary: 'scowl-gb',
     };
   }
 

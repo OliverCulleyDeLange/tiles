@@ -66,6 +66,11 @@ public class NearbyConnectionsPlugin extends Plugin {
         client = Nearby.getConnectionsClient(getContext());
     }
 
+    @Override
+    protected void handleOnStop() {
+        stopNearbySession();
+    }
+
     @PluginMethod
     public void isAvailable(PluginCall call) {
         JSObject result = new JSObject();
@@ -224,6 +229,11 @@ public class NearbyConnectionsPlugin extends Plugin {
 
     @PluginMethod
     public void stop(PluginCall call) {
+        stopNearbySession();
+        call.resolve();
+    }
+
+    private void stopNearbySession() {
         advertising = false;
         discovering = false;
         client.stopAdvertising();
@@ -231,7 +241,6 @@ public class NearbyConnectionsPlugin extends Plugin {
         client.stopAllEndpoints();
         if (getActivity() != null) getActivity().runOnUiThread(() ->
             getActivity().getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON));
-        call.resolve();
     }
 
     private JSObject endpoint(String id) {

@@ -75,6 +75,7 @@ export interface RoomSnapshot {
   players: PlayerSummary[];
   bunch: number;
   peel: number;
+  dumps: number;
   dictionary: DictionaryId;
   winnerId?: string;
   claimantId?: string;
@@ -107,6 +108,7 @@ export type ServerMessage =
   | { t: 'layout'; playerId: string; board: PlacedTile[] }
   | { t: 'new-game' }
   | { t: 'hand'; tiles: Tile[]; replace: boolean }
+  | { t: 'peel-result'; peel: number; accepted: boolean; reason?: string }
   | { t: 'chat'; id: string; playerId: string; name: string; text: string; at: number }
   | { t: 'chat-receipt'; messageId: string; playerId: string; status: 'received' | 'read' }
   | { t: 'toast'; text: string; tone?: 'good' | 'bad' | 'plain' }

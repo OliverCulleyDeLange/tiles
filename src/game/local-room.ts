@@ -35,6 +35,7 @@ export interface StoredLocalRoom {
   players: LocalPlayer[];
   bag: Tile[];
   peel: number;
+  dumps: number;
   dictionary: DictionaryId;
   winnerId?: string;
   claimantId?: string;
@@ -57,6 +58,7 @@ export class LocalRoomHost {
   private players: LocalPlayer[] = [];
   private bag: Tile[] = [];
   private peel = 0;
+  private dumps = 0;
   private dictionary: DictionaryId = 'scowl-gb';
   private winnerId?: string;
   private claimantId?: string;
@@ -76,6 +78,7 @@ export class LocalRoomHost {
     this.players = restored.players.map(player => ({ ...player, connected: false, hand: [...player.hand], board: [...player.board] }));
     this.bag = [...restored.bag];
     this.peel = restored.peel;
+    this.dumps = restored.dumps ?? 0;
     this.dictionary = restored.dictionary;
     this.winnerId = restored.winnerId;
     this.claimantId = restored.claimantId;
@@ -122,6 +125,7 @@ export class LocalRoomHost {
       players: this.players.map(player => ({ ...player, hand: [...player.hand], board: [...player.board] })),
       bag: [...this.bag],
       peel: this.peel,
+      dumps: this.dumps,
       dictionary: this.dictionary,
       winnerId: this.winnerId,
       claimantId: this.claimantId,
@@ -225,6 +229,7 @@ export class LocalRoomHost {
   private deal(restarting: boolean): void {
     this.phase = 'playing';
     this.peel = 0;
+    this.dumps = 0;
     this.bag = shuffledBag();
     this.winnerId = undefined;
     this.claimantId = undefined;
@@ -257,9 +262,15 @@ export class LocalRoomHost {
   }
 
   private doPeel(player: LocalPlayer, peel: number, raw: PlacedTile[]): void {
-    if (this.phase !== 'playing' || player.eliminated || peel !== this.peel) return;
+    if (this.phase !== 'playing' || player.eliminated || peel !== this.peel) {
+      this.deliver(player.id, { t: 'peel-result', peel, accepted: false, reason: 'The game changed before that peel arrived.' });
+      return;
+    }
     const board = sanitizeBoard(raw, new Set(player.hand.map(tile => tile.id)));
-    if (!board || this.overlapsAnother(player.id, board)) return;
+    if (!board || this.overlapsAnother(player.id, board)) {
+      this.deliver(player.id, { t: 'peel-result', peel, accepted: false, reason: 'Your tiles must form one connected, non-overlapping grid.' });
+      return;
+    }
     player.board = board;
     const active = this.players.filter(value => !value.eliminated);
     if (this.bag.length < active.length) {
@@ -269,10 +280,12 @@ export class LocalRoomHost {
       this.reviewBoard = undefined;
       this.reviewEndsAt = undefined;
       this.broadcast({ t: 'toast', text: `${player.name} is Top Banana!`, tone: 'good' });
+      this.deliver(player.id, { t: 'peel-result', peel, accepted: true });
       this.broadcastRoom();
       return;
     }
     this.peel++;
+    this.deliver(player.id, { t: 'peel-result', peel, accepted: true });
     const additions = new Map<string, Tile>();
     for (const candidate of active) {
       const drawn = this.bag.pop();
@@ -292,9 +305,11 @@ export class LocalRoomHost {
     if (index < 0) return;
     const [returned] = player.hand.splice(index, 1);
     player.board = player.board.filter(tile => tile.id !== returned.id);
-    this.bag.push(returned);
     shuffle(this.bag);
     player.hand.push(...this.bag.splice(-3));
+    this.bag.push(returned);
+    shuffle(this.bag);
+    this.dumps++;
     this.deliver(player.id, { t: 'hand', tiles: player.hand, replace: true });
     this.deliver(player.id, { t: 'toast', text: `Dumped ${returned.letter}. Three new tiles.`, tone: 'plain' });
     this.broadcastRoom();
@@ -333,12 +348,12 @@ export class LocalRoomHost {
   private snapshot(): RoomSnapshot {
     const areas = createPlayerAreas(this.players.length);
     const players: PlayerSummary[] = this.players.map((player, index) => ({
-      id: player.id, name: player.name, tilesLeft: player.hand.length - player.board.length,
+      id: player.id, name: player.name, tilesLeft: looseTileCount(player.hand, player.board),
       tiles: player.hand, board: player.board, area: areas[index], connected: player.connected ? undefined : false,
       eliminated: player.eliminated || undefined,
     }));
     return {
-      phase: this.phase, resumeAvailable: !!this.resumePhase, hostId: this.hostId, players, bunch: this.bag.length, peel: this.peel,
+      phase: this.phase, resumeAvailable: !!this.resumePhase, hostId: this.hostId, players, bunch: this.bag.length, peel: this.peel, dumps: this.dumps,
       dictionary: this.dictionary, winnerId: this.winnerId, claimantId: this.claimantId,
       reviewBoard: this.reviewBoard, reviewEndsAt: this.reviewEndsAt,
     };
@@ -365,6 +380,11 @@ export class LocalRoomHost {
       if (player.connected) this.deliver(player.id, { t: 'room', room, hand: handFor(player), reset, toast });
     });
   }
+}
+
+function looseTileCount(hand: Tile[], board: PlacedTile[]): number {
+  const placed = new Set(board.map(tile => tile.id));
+  return hand.reduce((count, tile) => count + (placed.has(tile.id) ? 0 : 1), 0);
 }
 
 function shuffledBag(): Tile[] {

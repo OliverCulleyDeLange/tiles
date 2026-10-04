@@ -106,15 +106,13 @@
         <dl>
           <div><dt>Bunch</dt><dd data-bunch>0</dd></div>
           <div><dt>Peels</dt><dd data-peel>0</dd></div>
+          <div><dt>Dumps</dt><dd data-dumps>0</dd></div>
         </dl>
       </header>
       <div class="player-disconnect-notice" data-player-disconnect role="status" aria-live="polite" hidden></div>
       <div class="play-layout">
         <div class="board" data-board aria-label="Shared crossword table">
           <div class="board-label" data-board-label>Shared table</div>
-          <div class="board-controls" data-board-controls aria-label="Table view controls">
-            <button type="button" data-reset-view aria-label="View my words">⌾</button>
-          </div>
           <div class="board-layer" data-board-layer>
             <div class="board-origin" aria-hidden="true"></div>
           </div>
@@ -123,11 +121,13 @@
       <section class="rack-wrap" aria-label="Loose tiles">
         <div class="rack" data-rack></div>
         <div class="rack-actions">
-          <button type="button" class="history-button" data-undo disabled>Undo</button>
-          <button type="button" class="history-button" data-redo disabled>Redo</button>
+          <button type="button" class="menu-button" data-game-menu-open>Menu</button>
+          <button type="button" class="randomise-button" data-randomise disabled>Mix</button>
+          <button type="button" class="flip-button" data-flip-word>Flip</button>
           <button type="button" class="direction-button" data-fill-direction aria-label="Autofill right">Fill →</button>
           <button type="button" class="dump-button" data-dump disabled>Dump</button>
-          <button type="button" class="menu-button" data-game-menu-open>Menu</button>
+          <button type="button" class="history-button" data-redo disabled>Redo</button>
+          <button type="button" class="history-button" data-undo disabled>Undo</button>
         </div>
       </section>
     </section>
@@ -141,12 +141,18 @@
           <strong>New game</strong>
           <span>Reshuffle and redeal fresh tiles for everyone.</span>
         </button>
+        <button type="button" class="bug-report-action" data-bug-report>
+          <strong>Save bug report</strong>
+          <span>Share connection and game diagnostics for debugging.</span>
+        </button>
         <button type="button" class="home-action" data-go-home>
           <strong>Back to home</strong>
           <span>Leave this game and return to the start screen.</span>
         </button>
       </div>
     </dialog>
+
+    <div class="peel-animation" data-peel-animation aria-hidden="true"><span>🍌</span><strong>PEEL!</strong></div>
 
     <dialog class="invite-dialog" data-invite-dialog>
       <p class="eyebrow">Local game invitation</p>
@@ -318,7 +324,10 @@
   .rack-actions { width: 100%; display: flex; justify-content: flex-end; gap: .4rem; }
   .history-button { min-width: 3.25rem; min-height: 2.25rem; padding: .3rem .5rem; border: 1.5px solid var(--tr-ink); border-radius: 7px; background: #fffdf3; color: var(--tr-ink); box-shadow: 2px 2px 0 #000; font: 800 .72rem/1 inherit; cursor: pointer; }
   .history-button:disabled { opacity: .35; box-shadow: none; cursor: default; }
-  .direction-button { min-height: 2.25rem; padding: .3rem .45rem; border: 1.5px solid var(--tr-ink); border-radius: 7px; background: #d8f8e3; color: var(--tr-ink); cursor: pointer; box-shadow: 2px 2px 0 #000; font: 800 .72rem/1 inherit; }
+  .direction-button, .randomise-button, .flip-button { min-height: 2.25rem; padding: .3rem .45rem; border: 1.5px solid var(--tr-ink); border-radius: 7px; background: #d8f8e3; color: var(--tr-ink); cursor: pointer; box-shadow: 2px 2px 0 #000; font: 800 .72rem/1 inherit; }
+  .randomise-button { background: #e7ddff; }
+  .flip-button { background: #dceeff; }
+  .randomise-button:disabled { opacity: .35; box-shadow: none; }
   .menu-button { min-height: 2.25rem; padding: .3rem .65rem; border-width: 1.5px; border-radius: 7px; background: var(--tr-yellow); color: var(--tr-ink); cursor: pointer; box-shadow: 2px 2px 0 var(--tr-ink); font-size: .76rem; }
   .play-layout { position: relative; grid-row: 3; min-width: 0; min-height: 0; overflow: hidden; }
   .player-chip { min-height: 28px; display: flex; align-items: center; gap: .35rem; border: 1.5px solid var(--tr-ink); border-radius: 999px; background: #fff; color: var(--tr-ink); padding: .18rem .55rem; font: 700 .72rem/1 inherit; cursor: pointer; }
@@ -336,9 +345,11 @@
   .selection-marquee { position: absolute; z-index: 7; border: 2px solid #c44a35; border-radius: 5px; background: rgba(255, 102, 77, .18); box-shadow: 0 0 0 1px rgba(255,255,255,.7) inset; pointer-events: none; }
   .board-layer { position: absolute; left: 50%; top: 50%; width: 4800px; height: 4800px; margin: -2400px 0 0 -2400px; transform-origin: 50% 50%; background-color: #eee4c5; background-image: radial-gradient(ellipse at center, rgba(255,251,229,.92) 0%, rgba(238,228,197,.48) 48%, rgba(196,177,132,.28) 100%), radial-gradient(circle at 22% 31%, rgba(113,91,49,.13) 0 1.2px, transparent 1.8px), radial-gradient(circle at 71% 63%, rgba(255,255,255,.52) 0 1.4px, transparent 2px), radial-gradient(circle at 43% 78%, rgba(130,101,54,.09) 0 1px, transparent 1.7px); background-size: 100% 100%, 37px 41px, 53px 47px, 61px 59px; will-change: transform; }
   .board-label { position: absolute; z-index: 5; top: .45rem; left: .5rem; padding: .25rem .5rem; border: 1px solid #b9ad87; border-radius: 999px; background: rgba(255,249,223,.86); color: #5d543d; font-size: .68rem; font-weight: 800; pointer-events: none; }
-  .board-controls { position: absolute; z-index: 6; top: .42rem; right: .5rem; display: flex; gap: .25rem; }
-  .board-controls button { display: grid; place-items: center; width: 2rem; height: 2rem; padding: 0; border: 1.5px solid var(--tr-ink); border-radius: 50%; background: rgba(255,253,243,.94); color: var(--tr-ink); box-shadow: 1px 1px 0 var(--tr-ink); font: 900 1rem/1 sans-serif; cursor: pointer; touch-action: manipulation; }
-  .board-controls button:active { translate: 1px 1px; box-shadow: none; }
+  .peel-animation { position: fixed; z-index: 100; inset: 0; display: grid; place-content: center; pointer-events: none; opacity: 0; transform: scale(.35) rotate(-18deg); }
+  .peel-animation span { font-size: clamp(5rem, 22vw, 12rem); filter: drop-shadow(0 .35rem 0 rgba(0,0,0,.18)); }
+  .peel-animation strong { text-align: center; font: 1000 clamp(2rem, 9vw, 5rem)/1 var(--font-display, sans-serif); color: #f4c400; -webkit-text-stroke: 2px var(--tr-ink); }
+  .peel-animation.is-playing { animation: peel-pop 1.15s cubic-bezier(.2,.8,.2,1); }
+  @keyframes peel-pop { 0% { opacity: 0; transform: scale(.25) rotate(-25deg); } 22%,70% { opacity: 1; transform: scale(1) rotate(8deg); } 100% { opacity: 0; transform: scale(1.35) rotate(20deg); } }
   .board-origin { position: absolute; left: 50%; top: 50%; width: 8px; height: 8px; transform: translate(-50%, -50%); border-radius: 50%; background: var(--tr-coral); opacity: .4; }
   .player-area { position: absolute; z-index: 1; box-sizing: border-box; border: 5px solid var(--owner-color); border-radius: 22px; background: color-mix(in srgb, var(--owner-color) 8%, transparent); box-shadow: inset 0 0 0 2px rgba(255,255,255,.7); pointer-events: none; }
   .player-area.is-you { background: color-mix(in srgb, var(--owner-color) 14%, transparent); }
@@ -347,8 +358,9 @@
   .board-layer > .letter-tile { position: absolute; z-index: 2; }
   .autofill-arrow { position: absolute; z-index: 4; display: grid; place-items: center; width: 30px; height: 30px; translate: -50% -50%; border: 2px solid var(--tr-ink); border-radius: 50%; background: var(--tr-yellow); color: var(--tr-ink); box-shadow: 2px 2px 0 var(--tr-ink); font: 900 1rem/1 sans-serif; pointer-events: none; }
   .letter-tile.is-spectating { cursor: default; }
-  .letter-tile.is-selected { outline: 4px solid var(--tr-coral); outline-offset: 2px; }
+  .letter-tile.is-selected { outline: 3px solid var(--tr-coral); outline-offset: -2px; }
   .letter-tile.is-valid-word { background: #d7f7d9; box-shadow: inset 0 -5px 0 #25a457, 3px 3px 0 #58795a; }
+  .letter-tile.is-partial-word { background: #ffe3ad; box-shadow: inset 0 -5px 0 #e58b18, 3px 3px 0 #8b6d3d; }
   .letter-tile.is-invalid-word { background: #ffe0da; box-shadow: inset 0 -5px 0 #d84b36, 3px 3px 0 #8b5d54; }
   .letter-tile.is-selected { outline-color: var(--tr-coral); }
   .letter-tile.is-dragging { cursor: grabbing; transform: rotate(4deg) scale(1.04); }
@@ -375,6 +387,7 @@
   .new-game-action { background: var(--tr-yellow); }
   .home-action { background: #fff; }
   .game-menu-actions button:disabled { opacity: .45; box-shadow: none; cursor: default; }
+  .game-menu-actions button[hidden] { display: none; }
   .update-notice { position: fixed; z-index: 300; top: max(.75rem, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: .75rem; width: max-content; max-width: calc(100vw - 1.5rem); padding: .6rem .65rem .6rem .9rem; border: 2px solid var(--tr-ink); border-radius: 11px; background: #fffdf3; color: var(--tr-ink); box-shadow: 4px 4px 0 var(--tr-ink); font-size: .9rem; font-weight: 800; }
   .update-notice[hidden] { display: none; }
   .update-notice button { flex: 0 0 auto; min-height: 2.5rem; padding: .55rem .75rem; border: 2px solid var(--tr-ink); border-radius: 8px; background: var(--tr-yellow); color: var(--tr-ink); font: 800 .85rem/1 inherit; cursor: pointer; }
@@ -417,7 +430,6 @@
     .rack { justify-content: flex-start; }
     .rack-slot { flex-basis: clamp(36px, 10vw, 40px); width: clamp(36px, 10vw, 40px); height: clamp(36px, 10vw, 40px); }
     .letter-tile { width: clamp(36px, 10vw, 40px); height: clamp(36px, 10vw, 40px); border-radius: 5px; box-shadow: 2px 2px 0 #8b7c54; font-size: 1.05rem; }
-    .board-controls button { width: 2.5rem; height: 2.5rem; }
     .rack-actions { width: 100%; max-width: none; gap: .25rem; }
     .rack-actions > button { min-width: 0; flex: 1 1 0; padding-inline: .25rem; }
     .dump-button, .menu-button { width: auto; max-width: none; }

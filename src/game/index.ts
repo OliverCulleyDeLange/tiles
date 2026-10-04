@@ -101,13 +101,17 @@ export function createTiles(root: HTMLElement): void {
   const gameMenu = root.querySelector<HTMLDialogElement>('[data-game-menu]')!;
   const gameMenuClose = root.querySelector<HTMLButtonElement>('[data-game-menu-close]')!;
   const newGame = root.querySelector<HTMLButtonElement>('[data-new-game]')!;
+  const bugReport = root.querySelector<HTMLButtonElement>('[data-bug-report]')!;
   const goHome = root.querySelector<HTMLButtonElement>('[data-go-home]')!;
   const bunch = root.querySelector<HTMLElement>('[data-bunch]')!;
   const peel = root.querySelector<HTMLElement>('[data-peel]')!;
+  const dumps = root.querySelector<HTMLElement>('[data-dumps]')!;
   const players = root.querySelector<HTMLElement>('[data-players]')!;
   const playerDisconnect = root.querySelector<HTMLElement>('[data-player-disconnect]')!;
-  const resetView = root.querySelector<HTMLButtonElement>('[data-reset-view]')!;
   const fillDirection = root.querySelector<HTMLButtonElement>('[data-fill-direction]')!;
+  const flipWordButton = root.querySelector<HTMLButtonElement>('[data-flip-word]')!;
+  const randomiseButton = root.querySelector<HTMLButtonElement>('[data-randomise]')!;
+  const peelAnimation = root.querySelector<HTMLElement>('[data-peel-animation]')!;
   const undoButton = root.querySelector<HTMLButtonElement>('[data-undo]')!;
   const redoButton = root.querySelector<HTMLButtonElement>('[data-redo]')!;
   const toast = root.querySelector<HTMLElement>('[data-toast]')!;
@@ -179,6 +183,7 @@ export function createTiles(root: HTMLElement): void {
   const nearbyReceiveBuffers = new Map<string, Map<number, ClientMessage | ServerMessage>>();
   const pendingNearbyPackets = new Map<string, PendingNearbyPacket>();
   let nearbyHomeStarting = false;
+  let nearbySuspended = false;
   let pendingNearbyInvite: NearbyVerification | null = null;
   let transportSend: ((message: object) => void) | null = null;
   let myId = '';
@@ -220,6 +225,53 @@ export function createTiles(root: HTMLElement): void {
   const unreadChatMessages = new Map<string, string>();
   const pendingChatMessages = new Map<string, PendingChatMessage>();
   let toastTimer: number | null = null;
+  const diagnostics: Array<{ at: string; event: string; detail?: unknown }> = [];
+
+  function diagnose(event: string, detail?: unknown): void {
+    diagnostics.push({ at: new Date().toISOString(), event, detail });
+    if (diagnostics.length > 300) diagnostics.shift();
+  }
+
+  async function saveBugReport(): Promise<void> {
+    setButtonLoading(bugReport, true, 'Preparing report…');
+    const report = {
+      generatedAt: new Date().toISOString(),
+      protocolVersion: PROTOCOL_VERSION,
+      platform: Capacitor.getPlatform(),
+      userAgent: navigator.userAgent,
+      connectionMode,
+      nearbyHostName,
+      nearbyPeerStates: [...nearbyPeerStates.entries()],
+      pendingPackets: [...pendingNearbyPackets.values()].map(packet => ({
+        endpointName: packet.endpointName, sequence: packet.sequence, attempts: packet.attempts,
+      })),
+      room: state,
+      localTiles: tiles,
+      diagnostics,
+    };
+    const file = new File([JSON.stringify(report, null, 2)], `tiles-bug-report-${Date.now()}.json`, { type: 'application/json' });
+    try {
+      const shareData = { title: 'Tiles bug report', files: [file] };
+      if (navigator.share && navigator.canShare?.(shareData)) await navigator.share(shareData);
+      else {
+        const url = URL.createObjectURL(file);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = file.name;
+        anchor.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 2_000);
+      }
+      show('Bug report saved.', 'good');
+      gameMenu.close();
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === 'AbortError')) show('Could not save the bug report.', 'bad');
+    } finally {
+      setButtonLoading(bugReport, false);
+    }
+  }
+
+  window.addEventListener('error', event => diagnose('window-error', { message: event.message, file: event.filename, line: event.lineno }));
+  window.addEventListener('unhandledrejection', event => diagnose('unhandled-rejection', String(event.reason)));
 
   function readSavedGames(): SavedGame[] {
     try {
@@ -465,6 +517,7 @@ export function createTiles(root: HTMLElement): void {
   }
 
   function connectionRestored(): void {
+    diagnose('connection-restored', { connectionMode });
     root.dataset.connection = 'online';
     connectionNotice.hidden = true;
     setButtonLoading(retryConnection, false);
@@ -477,6 +530,7 @@ export function createTiles(root: HTMLElement): void {
       return;
     }
     root.dataset.connection = 'offline';
+    diagnose('connection-lost', { connectionMode, message });
     connectionMessage.textContent = message;
     connectionNotice.hidden = false;
     setButtonLoading(retryConnection, false);
@@ -537,6 +591,12 @@ export function createTiles(root: HTMLElement): void {
       const additions = nextTiles.map(tile => ({ ...tile, x: null, y: null }));
       tiles.push(...additions);
       addRackTiles(additions.map(tile => tile.id));
+    }
+    const me = state?.players.find(player => player.id === myId);
+    if (me) {
+      me.tiles = tiles.map(({ id, letter }) => ({ id, letter }));
+      me.tilesLeft = tiles.filter(tile => tile.x == null || tile.y == null).length;
+      updateLooseCountChip(me.id, me.tilesLeft);
     }
     if (!dragging) {
       selectedId = null;
@@ -612,7 +672,9 @@ export function createTiles(root: HTMLElement): void {
       const player = state?.players.find(value => value.id === message.playerId);
       if (!player) return;
       player.board = message.board;
-      player.tilesLeft = player.tiles.length - message.board.length;
+      const placed = new Set(message.board.map(tile => tile.id));
+      player.tilesLeft = player.tiles.reduce((count, tile) => count + (placed.has(tile.id) ? 0 : 1), 0);
+      updateLooseCountChip(player.id, player.tilesLeft);
       if (message.playerId === myId) {
         syncOwnBoard(state!);
         clearEditHistory();
@@ -620,6 +682,12 @@ export function createTiles(root: HTMLElement): void {
       if (!dragging && !gesture && !nativeGesture) renderTiles();
     } else if (message.t === 'hand') {
       applyHand(message.tiles, message.replace);
+    } else if (message.t === 'peel-result') {
+      diagnose('peel-result', message);
+      if (!message.accepted) {
+        peelSent = -1;
+        if (message.reason) show(message.reason, 'bad');
+      }
     } else if (message.t === 'toast') show(message.text, message.tone);
     else if (message.t === 'error') {
       show(message.message, 'bad');
@@ -628,6 +696,7 @@ export function createTiles(root: HTMLElement): void {
       setButtonLoading(newGame, false);
       setButtonLoading(nearbyStartButton, false);
       setButtonLoading(chatSend, false);
+      peelSent = -1;
     }
   }
 
@@ -1031,6 +1100,7 @@ export function createTiles(root: HTMLElement): void {
     const key = nearbyPeerKey(name);
     if (!key) return;
     nearbyPeerStates.set(key, { phase, detail });
+    diagnose('nearby-peer-state', { name, phase, detail });
     if (state?.phase === 'lobby') renderLobbyRoster(state);
   }
 
@@ -1584,6 +1654,7 @@ export function createTiles(root: HTMLElement): void {
   function updateRoom(next: RoomSnapshot): void {
     if (dragging && next.phase !== 'playing') cancelDrag();
     const previousPhase = state?.phase;
+    const previousPeel = state?.peel;
     const dictionary = next.dictionary ?? 'scowl-gb';
     clearNearbyHelloTimer();
     if (connectionMode === 'nearby-join') {
@@ -1602,6 +1673,7 @@ export function createTiles(root: HTMLElement): void {
     rememberGame(next);
     bunch.textContent = String(next.bunch);
     peel.textContent = String(next.peel);
+    dumps.textContent = String(next.dumps ?? 0);
     renderLobbyRoster(next);
     players.innerHTML = next.players.map((player, index) =>
       `<li><button type="button" data-view-player="${escapeHtml(player.id)}" class="player-chip ${player.id === myId ? 'is-you' : ''} ${viewingPlayerId === player.id ? 'is-viewing' : ''} ${player.eliminated ? 'is-out' : ''} ${player.connected === false ? 'is-offline' : ''}" style="--owner-color:${ownerColor(index)}"><i></i><span>${escapeHtml(player.name)}</span><b>${player.connected === false ? 'OFFLINE' : player.eliminated ? 'OUT' : `${player.tilesLeft} loose`}</b></button></li>`
@@ -1623,6 +1695,7 @@ export function createTiles(root: HTMLElement): void {
     dictionarySelect.value = dictionary;
     dictionarySelect.disabled = myId !== next.hostId || next.phase !== 'lobby';
     newGame.disabled = myId !== next.hostId || next.players.length < 2;
+    newGame.hidden = myId !== next.hostId;
     newGame.title = myId === next.hostId ? '' : 'Only the host can start a new game.';
     void loadDictionary(dictionary);
 
@@ -1648,6 +1721,11 @@ export function createTiles(root: HTMLElement): void {
     if (next.phase === 'finished' && next.winnerId && previousPhase !== 'finished') {
       const winner = next.players.find(player => player.id === next.winnerId);
       show(winner?.id === myId ? 'You are Top Banana!' : `${winner?.name ?? 'A player'} wins — you can finish your grid.`, 'good');
+    }
+    if (previousPeel != null && next.peel > previousPeel) {
+      peelAnimation.classList.remove('is-playing');
+      void peelAnimation.offsetWidth;
+      peelAnimation.classList.add('is-playing');
     }
     if (!dragging) renderTiles();
   }
@@ -1715,6 +1793,7 @@ export function createTiles(root: HTMLElement): void {
       rack.append(slot);
     }
     dump.disabled = !selectedId || (state?.bunch ?? 0) < 3 || state?.phase !== 'playing';
+    randomiseButton.disabled = !canEditTiles() || tiles.filter(tile => tile.x == null || tile.y == null).length < 2;
     updateHistoryButtons();
     maybePeel();
   }
@@ -1742,7 +1821,7 @@ export function createTiles(root: HTMLElement): void {
     color: string,
     editable: boolean,
     rotation: number,
-    validity?: 'valid' | 'invalid',
+    validity?: 'valid' | 'partial' | 'invalid',
   ): HTMLElement {
     const element = document.createElement(editable ? 'button' : 'span');
     if (element instanceof HTMLButtonElement) element.type = 'button';
@@ -1754,6 +1833,7 @@ export function createTiles(root: HTMLElement): void {
     element.setAttribute('aria-label', `Letter ${tile.letter}, ${owner?.name ?? 'player'}'s tile`);
     element.classList.toggle('is-selected', editable && selectedIds.has(tile.id));
     element.classList.toggle('is-valid-word', validity === 'valid');
+    element.classList.toggle('is-partial-word', validity === 'partial');
     element.classList.toggle('is-invalid-word', validity === 'invalid');
     if (editable) element.addEventListener('pointerdown', event => beginDrag(event as PointerEvent, tile));
     return element;
@@ -1794,6 +1874,10 @@ export function createTiles(root: HTMLElement): void {
 
   function moveDrag(event: PointerEvent): void {
     if (!dragging) return;
+    if (pointers.size > 1 || gesture?.distance) {
+      cancelDrag();
+      return;
+    }
     dragging.lastX = event.clientX;
     dragging.lastY = event.clientY;
     if (!dragging.moved && Math.hypot(event.clientX - dragging.startX, event.clientY - dragging.startY) < 6) return;
@@ -2024,14 +2108,89 @@ export function createTiles(root: HTMLElement): void {
     return values;
   }
 
+  function flipSelectedWord(): void {
+    const anchor = tiles.find(tile => tile.id === selectedId && tile.x != null && tile.y != null);
+    if (!anchor || anchor.x == null || anchor.y == null) {
+      autoFillDirection = autoFillDirection === 'right' ? 'down' : 'right';
+      updateFillDirectionButton();
+      renderTiles();
+      return;
+    }
+    const at = new Map(boardPayload().map(tile => [`${tile.x},${tile.y}`, tile]));
+    const myIndex = state?.players.findIndex(player => player.id === myId) ?? 0;
+    const rotation = areaFor(state?.players[myIndex], myIndex, state?.players.length ?? 1)?.rotation ?? 0;
+    const right: readonly [number, number] = [Math.round(Math.cos(rotation)), Math.round(Math.sin(rotation))];
+    const down: readonly [number, number] = [-right[1], right[0]];
+    const horizontal = axisRun(anchor.x, anchor.y, right[0], right[1], at);
+    const vertical = axisRun(anchor.x, anchor.y, down[0], down[1], at);
+    const run = horizontal.length >= vertical.length ? horizontal : vertical;
+    if (run.length < 2) {
+      autoFillDirection = autoFillDirection === 'right' ? 'down' : 'right';
+      updateFillDirectionButton();
+      renderTiles();
+      return;
+    }
+    const from = run === horizontal ? right : down;
+    const to = run === horizontal ? down : right;
+    const pivot = run[0];
+    const moving = new Set(run.map(tile => tile.id));
+    const destinations = run.map((tile, index) => ({ tile, x: pivot.x + to[0] * index, y: pivot.y + to[1] * index }));
+    const occupied = new Set(allPlaced().filter(value => !moving.has(value.tile.id)).map(value => `${value.tile.x},${value.tile.y}`));
+    if (destinations.some(value => occupied.has(`${value.x},${value.y}`))) {
+      show('That word cannot flip into occupied spaces.', 'bad');
+      return;
+    }
+    const before = editSnapshot();
+    for (const destination of destinations) {
+      const tile = tiles.find(value => value.id === destination.tile.id);
+      if (tile) { tile.x = destination.x; tile.y = destination.y; }
+    }
+    selectedIds.clear();
+    run.forEach(tile => selectedIds.add(tile.id));
+    selectedId = anchor.id;
+    autoFillDirection = from === right ? 'down' : 'right';
+    updateFillDirectionButton();
+    recordEdit(before);
+    sendOwnLayout();
+    renderTiles();
+  }
+
+  function randomiseRack(): void {
+    const loose = rackOrder
+      .map((id, index) => ({ id, index, tile: id ? tiles.find(tile => tile.id === id) : undefined }))
+      .filter(value => value.id && value.tile && (value.tile.x == null || value.tile.y == null));
+    if (loose.length < 2) return;
+    const before = editSnapshot();
+    const ids = loose.map(value => value.id!);
+    for (let index = ids.length - 1; index > 0; index--) {
+      const other = Math.floor(Math.random() * (index + 1));
+      [ids[index], ids[other]] = [ids[other], ids[index]];
+    }
+    loose.forEach((value, index) => { rackOrder[value.index] = ids[index]; });
+    recordEdit(before);
+    renderTiles();
+  }
+
+  function updateFillDirectionButton(): void {
+    const arrow = autoFillDirection === 'right' ? '→' : '↓';
+    fillDirection.textContent = `Fill ${arrow}`;
+    fillDirection.setAttribute('aria-label', `Autofill ${autoFillDirection}`);
+  }
+
   function sendOwnLayout(): void {
     const board = boardPayload();
     const player = state?.players.find(value => value.id === myId);
     if (player) {
       player.board = board;
-      player.tilesLeft = player.tiles.length - board.length;
+      player.tilesLeft = tiles.filter(tile => tile.x == null || tile.y == null).length;
+      updateLooseCountChip(player.id, player.tilesLeft);
     }
     send({ t: 'layout', board });
+  }
+
+  function updateLooseCountChip(playerId: string, count: number): void {
+    const label = players.querySelector<HTMLElement>(`[data-view-player="${CSS.escape(playerId)}"] b`);
+    if (label) label.textContent = `${count} loose`;
   }
 
   function editSnapshot(): EditSnapshot {
@@ -2156,6 +2315,7 @@ export function createTiles(root: HTMLElement): void {
     selectedIds.clear();
     selectedId = null;
     root.querySelectorAll('.letter-tile.is-selected').forEach(element => element.classList.remove('is-selected'));
+    boardLayer.querySelectorAll('.autofill-arrow').forEach(element => element.remove());
     dump.disabled = true;
   }
 
@@ -2204,14 +2364,21 @@ export function createTiles(root: HTMLElement): void {
     return words;
   }
 
-  function wordValidity(values: PlacedTile[], rotation = 0): Map<string, 'valid' | 'invalid'> {
-    const result = new Map<string, 'valid' | 'invalid'>();
+  function wordValidity(values: PlacedTile[], rotation = 0): Map<string, 'valid' | 'partial' | 'invalid'> {
+    const result = new Map<string, 'valid' | 'partial' | 'invalid'>();
     if (!state || loadedDictionary !== state.dictionary) return result;
+    const scores = new Map<string, { valid: number; invalid: number }>();
     for (const word of findWords(values, rotation)) {
-      const status = dictionaryWords.has(word.text) ? 'valid' : 'invalid';
       for (const id of word.tileIds) {
-        if (status === 'valid' || !result.has(id)) result.set(id, status);
+        const score = scores.get(id) ?? { valid: 0, invalid: 0 };
+        if (dictionaryWords.has(word.text)) score.valid++;
+        else score.invalid++;
+        scores.set(id, score);
       }
+    }
+    for (const tile of values) {
+      const score = scores.get(tile.id);
+      result.set(tile.id, !score || score.valid === 0 ? 'invalid' : score.invalid === 0 ? 'valid' : 'partial');
     }
     return result;
   }
@@ -2220,10 +2387,8 @@ export function createTiles(root: HTMLElement): void {
     if (!state || loadedDictionary !== state.dictionary) return false;
     const myIndex = state.players.findIndex(player => player.id === myId);
     const rotation = areaFor(state.players[myIndex], myIndex, state.players.length)?.rotation ?? 0;
-    const words = findWords(values, rotation);
-    if (!words.length || words.some(word => !dictionaryWords.has(word.text))) return false;
-    const covered = new Set(words.flatMap(word => word.tileIds));
-    return covered.size === values.length;
+    const validity = wordValidity(values, rotation);
+    return validity.size === values.length && [...validity.values()].every(status => status === 'valid');
   }
 
   function connected(values: PlacedTile[]): boolean {
@@ -2584,7 +2749,6 @@ export function createTiles(root: HTMLElement): void {
     }
     if (!pointers.size) {
       nativeGesture = null;
-      clearSelection();
       canvasPress = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false };
     }
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
@@ -2660,6 +2824,7 @@ export function createTiles(root: HTMLElement): void {
     if (canvasPress?.pointerId === event.pointerId) {
       if (!canvasPress.moved && event.type !== 'pointercancel') {
         lastCanvasTap = { x: event.clientX, y: event.clientY, at: performance.now() };
+        clearSelection();
       } else lastCanvasTap = null;
       canvasPress = null;
     }
@@ -2702,6 +2867,11 @@ export function createTiles(root: HTMLElement): void {
       y: event.clientY || rect.top + rect.height / 2,
     };
   }, { passive: false });
+  root.addEventListener('touchstart', event => {
+    if (event.touches.length < 2 || !dragging) return;
+    cancelDrag();
+    canvasPress = null;
+  }, { capture: true, passive: true });
   board.addEventListener('gesturechange', raw => {
     const event = raw as Event & { scale?: number; rotation?: number };
     if (!nativeGesture) return;
@@ -2730,11 +2900,11 @@ export function createTiles(root: HTMLElement): void {
   });
   fillDirection.addEventListener('click', () => {
     autoFillDirection = autoFillDirection === 'right' ? 'down' : 'right';
-    const arrow = autoFillDirection === 'right' ? '→' : '↓';
-    fillDirection.textContent = `Fill ${arrow}`;
-    fillDirection.setAttribute('aria-label', `Autofill ${autoFillDirection}`);
+    updateFillDirectionButton();
     renderTiles();
   });
+  flipWordButton.addEventListener('click', flipSelectedWord);
+  randomiseButton.addEventListener('click', randomiseRack);
   undoButton.addEventListener('click', () => {
     const previous = undoStack.pop();
     if (!previous) return;
@@ -2747,10 +2917,6 @@ export function createTiles(root: HTMLElement): void {
     undoStack.push(editSnapshot());
     restoreEdit(next);
   });
-  resetView.addEventListener('click', () => {
-    focusPlayer(myId);
-  });
-
   dump.addEventListener('click', () => {
     if (selectedId) {
       setButtonLoading(dump, true, 'Dumping…');
@@ -2759,6 +2925,7 @@ export function createTiles(root: HTMLElement): void {
   });
   gameMenuOpen.addEventListener('click', () => gameMenu.showModal());
   gameMenuClose.addEventListener('click', () => gameMenu.close());
+  bugReport.addEventListener('click', () => { void saveBugReport(); });
   newGame.addEventListener('click', () => {
     if (!state || myId !== state.hostId || state.players.length < 2) return;
     setButtonLoading(newGame, true, 'Starting new game…');
@@ -2823,8 +2990,21 @@ export function createTiles(root: HTMLElement): void {
     if (connectionMode === 'online') send({ t: 'ping' });
   }, 25_000);
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState !== 'visible') return;
+    if (document.visibilityState === 'hidden') {
+      if (isNativeNearby() && (connectionMode === 'nearby-host' || connectionMode === 'nearby-join')) {
+        nearbySuspended = true;
+        diagnose('app-backgrounded', { connectionMode });
+        void NearbyConnections.stop().catch(error => diagnose('background-stop-failed', nearbyErrorDetail(error)));
+      }
+      return;
+    }
     flushChatReadReceipts();
+    if (nearbySuspended) {
+      nearbySuspended = false;
+      diagnose('app-foregrounded', { connectionMode });
+      void resumeNearbyTransport();
+      return;
+    }
     if (connectionMode === 'nearby-home') {
       void startNearbyHome();
     } else if ((connectionMode === 'nearby-host' && state?.players.some(player => player.connected === false))
