@@ -1282,11 +1282,11 @@ export function createTiles(root: HTMLElement): void {
     const samples = heartbeatSamples.get(playerId) ?? [];
     const visible = samples.slice(-12);
     const points = visible.map((sample, index) => {
-      const x = visible.length < 2 ? 55 : 5 + index * (100 / (visible.length - 1));
-      const y = sample < 0 ? 31 : 30 - Math.min(sample, 600) / 600 * 26;
+      const x = visible.length < 2 ? 72 : 34 + index * (82 / (visible.length - 1));
+      const y = sample < 0 ? 39 : 38 - Math.min(sample, 600) / 600 * 34;
       return `${x.toFixed(1)},${y.toFixed(1)}`;
     }).join(' ');
-    return `<svg class="heartbeat-monitor${unavailable ? ' is-unavailable' : ''}" viewBox="0 0 110 44" role="img" aria-label="Recent round-trip ping times"><polyline points="${points}"></polyline><text x="5" y="41">−44s</text><text x="105" y="41" text-anchor="end">now</text></svg>`;
+    return `<svg class="heartbeat-monitor${unavailable ? ' is-unavailable' : ''}" viewBox="0 0 120 44" role="img" aria-label="Recent round-trip ping times from zero to 600 milliseconds"><text x="0" y="8">600 ms</text><text x="0" y="41">0 ms</text><polyline points="${points}"></polyline></svg>`;
   }
 
   function pulsePlayerHeartbeat(playerId: string, unavailable: boolean): void {
@@ -3431,6 +3431,15 @@ export function createTiles(root: HTMLElement): void {
 
   function initializeUpdates(): void {
     if (!('serviceWorker' in navigator)) return;
+    if (Capacitor.isNativePlatform()) {
+      // Native releases are updated through the installed app bundle. A PWA
+      // worker can activate later and reload the WebView mid-game, which tears
+      // down every Nearby endpoint on the host.
+      void navigator.serviceWorker.getRegistrations()
+        .then(registrations => Promise.all(registrations.map(registration => registration.unregister())))
+        .catch(() => undefined);
+      return;
+    }
     const scopeUrl = new URL(import.meta.env.BASE_URL, location.origin);
     if (!scopeUrl.pathname.endsWith('/')) scopeUrl.pathname += '/';
     const workerUrl = new URL('sw.js', scopeUrl);
