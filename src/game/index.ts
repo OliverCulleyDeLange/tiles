@@ -194,8 +194,11 @@ export function createTiles(root: HTMLElement): void {
   type NearbyPeerPhase = 'searching' | 'found' | 'requesting' | 'requested' | 'authenticating' | 'transport' | 'syncing' | 'synced' | 'disconnected' | 'failed';
   const nearbyPeerStates = new Map<string, { phase: NearbyPeerPhase; detail: string }>();
   type NearbyWirePacket =
-    | { w: 1; t: 'data'; sequence: number; payload: ClientMessage | ServerMessage }
+    | { w: 1; t: 'data'; sequence: number; payload: ClientMessage | ServerMessage | NearbyControlMessage }
     | { w: 1; t: 'ack'; sequence: number };
+  type NearbyControlMessage =
+    | { t: 'nearby-invite'; hostName: string }
+    | { t: 'nearby-invite-response'; accept: boolean };
   interface PendingNearbyPacket {
     endpointId: string;
     endpointName: string;
@@ -206,8 +209,10 @@ export function createTiles(root: HTMLElement): void {
   }
   const nearbySendSequences = new Map<string, number>();
   const nearbyReceiveSequences = new Map<string, number>();
-  const nearbyReceiveBuffers = new Map<string, Map<number, ClientMessage | ServerMessage>>();
+  const nearbyReceiveBuffers = new Map<string, Map<number, ClientMessage | ServerMessage | NearbyControlMessage>>();
   const pendingNearbyPackets = new Map<string, PendingNearbyPacket>();
+  const nearbyControlPeers = new Map<string, NearbyEndpoint>();
+  const nearbyControlConnectingIds = new Set<string>();
   let nearbyHomeStarting = false;
   let nearbyHomeRestart: Promise<void> | null = null;
   let nameChangeTimer: number | null = null;
@@ -558,6 +563,33 @@ export function createTiles(root: HTMLElement): void {
 
   function shouldRequestNearbyConnection(endpoint: NearbyEndpoint): boolean {
     return !(Capacitor.getPlatform() === 'android' && endpoint.platform === 'ios');
+  }
+
+  function isCrossPlatformNearby(endpoint: NearbyEndpoint): boolean {
+    return !!endpoint.platform && endpoint.platform !== Capacitor.getPlatform();
+  }
+
+  function controlPeerFor(endpoint: NearbyEndpoint | undefined): NearbyEndpoint | undefined {
+    if (!endpoint) return undefined;
+    return [...nearbyControlPeers.values()].find(peer =>
+      peer.endpointId === endpoint.endpointId
+      || !!(peer.deviceId && endpoint.deviceId && peer.deviceId === endpoint.deviceId));
+  }
+
+  async function openNearbyControlConnection(endpoint: NearbyEndpoint): Promise<void> {
+    if (connectionMode !== 'nearby-home' || Capacitor.getPlatform() !== 'ios'
+      || endpoint.platform !== 'android' || controlPeerFor(endpoint)
+      || nearbyControlConnectingIds.has(endpoint.endpointId)) return;
+    nearbyControlConnectingIds.add(endpoint.endpointId);
+    setNearbyPeerState(endpoint.name, 'requesting', 'Opening nearby control link');
+    try {
+      await NearbyConnections.requestConnection({ endpointId: endpoint.endpointId, name: nearbyWireName() });
+      setNearbyPeerState(endpoint.name, 'requested', 'Nearby control link requested');
+    } catch (error) {
+      nearbyControlConnectingIds.delete(endpoint.endpointId);
+      setNearbyPeerState(endpoint.name, 'failed', `Could not open nearby control link · ${nearbyErrorDetail(error)}`);
+      renderNearbyEndpoints();
+    }
   }
 
   async function advertiseNearbyInvitations(): Promise<void> {
@@ -1149,7 +1181,7 @@ export function createTiles(root: HTMLElement): void {
       w: 1,
       t: 'data',
       sequence,
-      payload: message as ClientMessage | ServerMessage,
+      payload: message as ClientMessage | ServerMessage | NearbyControlMessage,
     };
     const pending: PendingNearbyPacket = {
       endpointId,
@@ -1169,7 +1201,25 @@ export function createTiles(root: HTMLElement): void {
     void sendNearbyRaw(endpointId, JSON.stringify(packet)).catch(() => undefined);
   }
 
-  function deliverNearbyMessage(endpointId: string, endpointName: string, message: ClientMessage | ServerMessage): void {
+  function deliverNearbyMessage(endpointId: string, endpointName: string, message: ClientMessage | ServerMessage | NearbyControlMessage): void {
+    if (message.t === 'nearby-invite') {
+      if (connectionMode !== 'nearby-home' || pendingNearbyInvite) return;
+      const endpoint = nearbyControlPeers.get(endpointId) ?? { endpointId, name: message.hostName };
+      showNearbyInvitation({ ...endpoint, name: message.hostName, code: '' });
+      return;
+    }
+    if (message.t === 'nearby-invite-response') {
+      if (!message.accept) {
+        const invite = nearbyInviteStates.get(endpointId);
+        if (invite) {
+          nearbyInviteStates.delete(endpointId);
+          outgoingNearbyInvites.delete(endpointId);
+          setNearbyPeerState(invite.name, 'failed', 'Game request declined');
+          if (state) renderLobbyRoster(state);
+        }
+      }
+      return;
+    }
     if (localHost) {
       if (message.t === 'hello') setNearbyPeerState(endpointName, 'synced', 'App handshake received · reliable channel synced');
       localHost.receive(endpointId, message as ClientMessage);
@@ -1195,14 +1245,14 @@ export function createTiles(root: HTMLElement): void {
     const expected = nearbyReceiveSequences.get(event.endpointId) ?? 1;
     if (packet.sequence < expected) return;
     if (packet.sequence > expected) {
-      const buffer = nearbyReceiveBuffers.get(event.endpointId) ?? new Map<number, ClientMessage | ServerMessage>();
+      const buffer = nearbyReceiveBuffers.get(event.endpointId) ?? new Map<number, ClientMessage | ServerMessage | NearbyControlMessage>();
       buffer.set(packet.sequence, packet.payload);
       nearbyReceiveBuffers.set(event.endpointId, buffer);
       return;
     }
 
     let sequence = expected;
-    let payload: ClientMessage | ServerMessage | undefined = packet.payload;
+    let payload: ClientMessage | ServerMessage | NearbyControlMessage | undefined = packet.payload;
     const buffer = nearbyReceiveBuffers.get(event.endpointId);
     while (payload) {
       deliverNearbyMessage(event.endpointId, event.name, payload);
@@ -1451,6 +1501,12 @@ export function createTiles(root: HTMLElement): void {
       renderPlayerDisconnect(state);
     }
     try {
+      const controlPeer = controlPeerFor(endpoint);
+      if (controlPeer) {
+        sendNearby(controlPeer.endpointId, { t: 'nearby-invite', hostName: nearbyName });
+        setNearbyPeerState(playerName, 'requested', 'Game request delivered · waiting for response');
+        return;
+      }
       if (!shouldRequestNearbyConnection(endpoint) && endpoint.deviceId) {
         nearbyInvitationTargets.add(endpoint.deviceId);
         await advertiseNearbyInvitations();
@@ -1559,10 +1615,16 @@ export function createTiles(root: HTMLElement): void {
       }
       nearbyEndpoints.append(searching);
     }
+    const selectedWaitingForControl = [...selectedNearbyIds].some(endpointId => {
+      const endpoint = nearbyEndpointMap.get(endpointId);
+      return endpoint && isCrossPlatformNearby(endpoint) && !controlPeerFor(endpoint);
+    });
     nearbyStartButton.hidden = selectedNearbyIds.size === 0;
     if (nearbyStartButton.getAttribute('aria-busy') !== 'true') {
-      nearbyStartButton.disabled = selectedNearbyIds.size === 0 || nearbyHomeStarting;
-      nearbyStartButton.textContent = selectedNearbyIds.size
+      nearbyStartButton.disabled = selectedNearbyIds.size === 0 || nearbyHomeStarting || selectedWaitingForControl;
+      nearbyStartButton.textContent = selectedWaitingForControl
+        ? 'Preparing nearby connection…'
+        : selectedNearbyIds.size
         ? `Request game · ${selectedNearbyIds.size} ${selectedNearbyIds.size === 1 ? 'player' : 'players'}`
         : 'Request game';
     }
@@ -1570,7 +1632,9 @@ export function createTiles(root: HTMLElement): void {
 
   function showNearbyInvitation(invitation: NearbyVerification): void {
     if (pendingNearbyInvite) {
-      void NearbyConnections.acceptVerification({ endpointId: invitation.endpointId, accept: false });
+      if (!nearbyControlPeers.has(invitation.endpointId)) {
+        void NearbyConnections.acceptVerification({ endpointId: invitation.endpointId, accept: false });
+      }
       return;
     }
     pendingNearbyInvite = invitation;
@@ -1582,6 +1646,7 @@ export function createTiles(root: HTMLElement): void {
   async function answerNearbyInvitation(accept: boolean): Promise<void> {
     const invitation = pendingNearbyInvite;
     if (!invitation) return;
+    const connectedControlPeer = nearbyControlPeers.has(invitation.endpointId);
     setButtonLoading(accept ? inviteAccept : inviteDecline, true, accept ? 'Joining…' : 'Declining…');
     try {
       if (accept) {
@@ -1599,7 +1664,12 @@ export function createTiles(root: HTMLElement): void {
           NearbyConnections.stopAdvertising(),
         ]);
       }
-      await NearbyConnections.acceptVerification({ endpointId: invitation.endpointId, accept });
+      if (connectedControlPeer) {
+        sendNearby(invitation.endpointId, { t: 'nearby-invite-response', accept });
+        if (accept) enterNearbyGuest(invitation);
+      } else {
+        await NearbyConnections.acceptVerification({ endpointId: invitation.endpointId, accept });
+      }
       if (!accept) {
         nearbyConnectingId = null;
         nearbyHostName = '';
@@ -1773,21 +1843,7 @@ export function createTiles(root: HTMLElement): void {
       nearbyEndpointMap.set(endpoint.endpointId, endpoint);
       if (connectionMode === 'nearby-home' && isNew) selectedNearbyIds.add(endpoint.endpointId);
       renderNearbyEndpoints();
-      if (connectionMode === 'nearby-home'
-        && endpoint.inviteDeviceIds?.includes(nearbyDeviceId)
-        && !nearbyConnectingId
-        && !pendingNearbyInvite) {
-        nearbyConnectingId = endpoint.endpointId;
-        nearbyHostName = endpoint.name;
-        setNearbyPeerState(endpoint.name, 'requesting', 'Game request found · opening secure connection');
-        try {
-          await NearbyConnections.requestConnection({ endpointId: endpoint.endpointId, name: nearbyWireName() });
-          setNearbyPeerState(endpoint.name, 'requested', 'Game request received · waiting for approval');
-        } catch (error) {
-          nearbyConnectingId = null;
-          setNearbyPeerState(endpoint.name, 'failed', `Could not open game request · ${nearbyErrorDetail(error)}`);
-        }
-      }
+      await openNearbyControlConnection(endpoint);
       dispatchPendingReinvites();
       if (state && connectionMode === 'nearby-host') {
         renderLobbyRoster(state);
@@ -1824,6 +1880,7 @@ export function createTiles(root: HTMLElement): void {
       // rediscovered instead of making the home list flicker and lose selection.
       const timer = window.setTimeout(() => {
         nearbyEndpointLossTimers.delete(endpoint.endpointId);
+        if (controlPeerFor(endpoint)) return;
         nearbyEndpointMap.delete(endpoint.endpointId);
         selectedNearbyIds.delete(endpoint.endpointId);
         // Discovery loss does not mean connection loss. Nearby often removes an
@@ -1841,6 +1898,17 @@ export function createTiles(root: HTMLElement): void {
     await NearbyConnections.addListener('verificationRequired', rawVerification => {
       const verification = decodeNearbyEndpoint(rawVerification);
       setNearbyPeerState(verification.name, 'authenticating', 'Secure Nearby handshake · authenticating devices');
+      const expectedHostControlPeer = connectionMode === 'nearby-host'
+        && !!verification.deviceId
+        && nearbyInvitationTargets.has(verification.deviceId);
+      if (isCrossPlatformNearby(verification)
+        && (connectionMode === 'nearby-home' || expectedHostControlPeer)) {
+        // Cross-platform peers keep a verified control link while both users
+        // are on the nearby screen. Game requests can then be delivered as a
+        // payload instead of waiting for changed BLE metadata to propagate.
+        void NearbyConnections.acceptVerification({ endpointId: verification.endpointId, accept: true });
+        return;
+      }
       if (connectionMode === 'nearby-home') {
         const restored = readLocalGame();
         const ownToken = localStorage.getItem('tiles-session:nearby');
@@ -1882,10 +1950,29 @@ export function createTiles(root: HTMLElement): void {
     });
     await NearbyConnections.addListener('connected', async rawEndpoint => {
       const endpoint = decodeNearbyEndpoint(rawEndpoint);
+      nearbyControlConnectingIds.delete(endpoint.endpointId);
       clearNearbyChannel(endpoint.endpointId);
       connectionRestored();
       setNearbyPeerState(endpoint.name, 'transport', 'Nearby transport connected · waiting for app handshake');
+      if (isCrossPlatformNearby(endpoint)) nearbyControlPeers.set(endpoint.endpointId, endpoint);
+      if (connectionMode === 'nearby-host' && !localHost && isCrossPlatformNearby(endpoint)) return;
       if (localHost) {
+        const pendingControlInvite = [...nearbyInviteStates.entries()].find(([endpointId, invite]) =>
+          endpointId === endpoint.endpointId
+          || !!(endpoint.deviceId && invite.deviceId === endpoint.deviceId));
+        if (pendingControlInvite && isCrossPlatformNearby(endpoint)) {
+          const [originalEndpointId, invite] = pendingControlInvite;
+          if (originalEndpointId !== endpoint.endpointId) {
+            nearbyInviteStates.delete(originalEndpointId);
+            outgoingNearbyInvites.delete(originalEndpointId);
+            nearbyInviteStates.set(endpoint.endpointId, invite);
+            outgoingNearbyInvites.add(endpoint.endpointId);
+          }
+          sendNearby(endpoint.endpointId, { t: 'nearby-invite', hostName: nearbyName });
+          setNearbyPeerState(invite.name, 'requested', 'Game request delivered · waiting for response');
+          if (state) renderLobbyRoster(state);
+          return;
+        }
         const invite = nearbyInviteStates.get(endpoint.endpointId);
         if (invite) invite.status = 'accepted';
         localHost.setConnectionStatus(endpoint.endpointId, 'accepted');
@@ -1908,6 +1995,11 @@ export function createTiles(root: HTMLElement): void {
         return;
       }
       if (connectionMode === 'nearby-home') {
+        if (isCrossPlatformNearby(endpoint)) {
+          setNearbyPeerState(endpoint.name, 'found', 'Nearby control link ready');
+          renderNearbyEndpoints();
+          return;
+        }
         enterNearbyGuest(endpoint);
         return;
       }
@@ -1930,8 +2022,14 @@ export function createTiles(root: HTMLElement): void {
     });
     await NearbyConnections.addListener('disconnected', rawEndpoint => {
       const endpoint = decodeNearbyEndpoint(rawEndpoint);
+      nearbyControlConnectingIds.delete(endpoint.endpointId);
+      nearbyControlPeers.delete(endpoint.endpointId);
       clearNearbyChannel(endpoint.endpointId);
       setNearbyPeerState(endpoint.name, 'disconnected', 'Nearby transport disconnected · retry required');
+      if (connectionMode === 'nearby-home') {
+        renderNearbyEndpoints();
+        void openNearbyControlConnection(endpoint);
+      }
       if (connectionMode === 'nearby-host' && localHost) {
         const pendingInvite = outgoingNearbyInvites.has(endpoint.endpointId);
         nearbyEndpointMap.delete(endpoint.endpointId);
@@ -1979,7 +2077,7 @@ export function createTiles(root: HTMLElement): void {
     ]));
     nearbyInvitationTargets.clear();
     for (const endpoint of invitedEndpoints.values()) {
-      if (endpoint?.deviceId && !shouldRequestNearbyConnection(endpoint)) {
+      if (endpoint?.deviceId && !shouldRequestNearbyConnection(endpoint) && !controlPeerFor(endpoint)) {
         nearbyInvitationTargets.add(endpoint.deviceId);
       }
     }
@@ -2077,6 +2175,21 @@ export function createTiles(root: HTMLElement): void {
       for (const [index, endpointId] of inviteIds.entries()) {
         const endpoint = invitedEndpoints.get(endpointId);
         const endpointName = invitedEndpointNames.get(endpointId) ?? 'Nearby player';
+        const controlPeer = controlPeerFor(endpoint);
+        if (controlPeer) {
+          if (controlPeer.endpointId !== endpointId) {
+            const invite = nearbyInviteStates.get(endpointId);
+            if (invite) {
+              nearbyInviteStates.delete(endpointId);
+              outgoingNearbyInvites.delete(endpointId);
+              nearbyInviteStates.set(controlPeer.endpointId, invite);
+              outgoingNearbyInvites.add(controlPeer.endpointId);
+            }
+          }
+          sendNearby(controlPeer.endpointId, { t: 'nearby-invite', hostName: name });
+          setNearbyPeerState(endpointName, 'requested', 'Game request delivered · waiting for response');
+          continue;
+        }
         if (endpoint && !shouldRequestNearbyConnection(endpoint)) continue;
         try {
           await NearbyConnections.requestConnection({ endpointId, name: nearbyWireName(name) });
@@ -3565,6 +3678,8 @@ export function createTiles(root: HTMLElement): void {
     nearbyInviteStates.clear();
     outgoingNearbyInvites.clear();
     nearbyInvitationTargets.clear();
+    nearbyControlPeers.clear();
+    nearbyControlConnectingIds.clear();
     approvedNearbyNames.clear();
     pendingReinviteNames.clear();
     nearbyHostId = null;
