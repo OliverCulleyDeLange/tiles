@@ -102,7 +102,9 @@
     <section class="game-shell" data-view="game" hidden>
       <header class="game-bar">
         <div class="compact-brand"><span>TS</span><strong>Tiles</strong></div>
-        <ul class="top-players" data-players aria-label="Players"></ul>
+        <div class="players-scroll" data-player-scroll>
+          <ul class="top-players" data-players aria-label="Players"></ul>
+        </div>
         <dl>
           <div><dt>Bunch</dt><dd data-bunch>0</dd></div>
           <div><dt>Peels</dt><dd data-peel>0</dd></div>
@@ -112,7 +114,6 @@
       <div class="player-disconnect-notice" data-player-disconnect role="status" aria-live="polite" hidden></div>
       <div class="play-layout">
         <div class="board" data-board aria-label="Shared crossword table">
-          <div class="board-label" data-board-label>Shared table</div>
           <div class="board-layer" data-board-layer>
             <div class="board-origin" aria-hidden="true"></div>
           </div>
@@ -136,6 +137,10 @@
       <button type="button" class="dialog-close" data-game-menu-close aria-label="Close">×</button>
       <p class="eyebrow">Game options</p>
       <h2>Menu</h2>
+      <div class="gesture-help">
+        <strong>Board controls</strong>
+        <span>Drag to pan. Pinch to zoom. Twist two fingers to rotate.</span>
+      </div>
       <div class="game-menu-actions">
         <button type="button" class="new-game-action" data-new-game>
           <strong>New game</strong>
@@ -316,7 +321,13 @@
   .game-bar dl div { min-width: 46px; text-align: center; border: 1.5px solid var(--tr-ink); border-radius: 7px; background: #fff6bf; padding: .18rem .35rem; }
   .game-bar dt { font-size: .55rem; text-transform: uppercase; font-weight: 800; }
   .game-bar dd { margin: 0; font: 800 1rem/1 Georgia, serif; }
-  .top-players { min-width: 0; list-style: none; margin: 0; padding: 0; display: flex; justify-content: center; gap: .3rem; overflow-x: auto; scrollbar-width: thin; }
+  .players-scroll { position: relative; min-width: 0; overflow: hidden; }
+  .players-scroll::before, .players-scroll::after { content: ''; position: absolute; z-index: 3; top: 0; bottom: 0; width: 1.4rem; opacity: 0; pointer-events: none; transition: opacity .15s ease; }
+  .players-scroll::before { left: 0; background: linear-gradient(90deg, var(--tr-yellow), transparent); }
+  .players-scroll::after { right: 0; background: linear-gradient(270deg, var(--tr-yellow), transparent); }
+  .players-scroll.can-scroll-left::before, .players-scroll.can-scroll-right::after { opacity: 1; }
+  .top-players { min-width: 0; list-style: none; margin: 0; padding: .18rem 1rem .25rem; display: flex; justify-content: flex-start; gap: .3rem; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .top-players::-webkit-scrollbar { display: none; }
   .top-players li { flex: 0 0 auto; }
   .dump-button { min-height: 2.25rem; padding: .3rem .65rem; border-width: 1.5px; border-radius: 7px; background: var(--tr-coral); color: #fff; cursor: pointer; box-shadow: 2px 2px 0 var(--tr-ink); font-size: .76rem; }
   .dump-button small { display: block; font-size: .65rem; text-transform: uppercase; }
@@ -344,15 +355,14 @@
   .board.is-selecting { cursor: crosshair; }
   .selection-marquee { position: absolute; z-index: 7; border: 2px solid #c44a35; border-radius: 5px; background: rgba(255, 102, 77, .18); box-shadow: 0 0 0 1px rgba(255,255,255,.7) inset; pointer-events: none; }
   .board-layer { position: absolute; left: 50%; top: 50%; width: 4800px; height: 4800px; margin: -2400px 0 0 -2400px; transform-origin: 50% 50%; background-color: #eee4c5; background-image: radial-gradient(ellipse at center, rgba(255,251,229,.92) 0%, rgba(238,228,197,.48) 48%, rgba(196,177,132,.28) 100%), radial-gradient(circle at 22% 31%, rgba(113,91,49,.13) 0 1.2px, transparent 1.8px), radial-gradient(circle at 71% 63%, rgba(255,255,255,.52) 0 1.4px, transparent 2px), radial-gradient(circle at 43% 78%, rgba(130,101,54,.09) 0 1px, transparent 1.7px); background-size: 100% 100%, 37px 41px, 53px 47px, 61px 59px; will-change: transform; }
-  .board-label { position: absolute; z-index: 5; top: .45rem; left: .5rem; padding: .25rem .5rem; border: 1px solid #b9ad87; border-radius: 999px; background: rgba(255,249,223,.86); color: #5d543d; font-size: .68rem; font-weight: 800; pointer-events: none; }
   .peel-animation { position: fixed; z-index: 100; inset: 0; display: grid; place-content: center; pointer-events: none; opacity: 0; transform: scale(.35) rotate(-18deg); }
   .peel-animation span { font-size: clamp(5rem, 22vw, 12rem); filter: drop-shadow(0 .35rem 0 rgba(0,0,0,.18)); }
   .peel-animation strong { text-align: center; font: 1000 clamp(2rem, 9vw, 5rem)/1 var(--font-display, sans-serif); color: #f4c400; -webkit-text-stroke: 2px var(--tr-ink); }
   .peel-animation.is-playing { animation: peel-pop 1.15s cubic-bezier(.2,.8,.2,1); }
   @keyframes peel-pop { 0% { opacity: 0; transform: scale(.25) rotate(-25deg); } 22%,70% { opacity: 1; transform: scale(1) rotate(8deg); } 100% { opacity: 0; transform: scale(1.35) rotate(20deg); } }
   .board-origin { position: absolute; left: 50%; top: 50%; width: 8px; height: 8px; transform: translate(-50%, -50%); border-radius: 50%; background: var(--tr-coral); opacity: .4; }
-  .player-area { position: absolute; z-index: 1; box-sizing: border-box; border: 5px solid var(--owner-color); border-radius: 22px; background: color-mix(in srgb, var(--owner-color) 8%, transparent); box-shadow: inset 0 0 0 2px rgba(255,255,255,.7); pointer-events: none; }
-  .player-area.is-you { background: color-mix(in srgb, var(--owner-color) 14%, transparent); }
+  .player-area { position: absolute; z-index: 1; box-sizing: border-box; border: 0; border-radius: 38%; background: radial-gradient(ellipse at center, color-mix(in srgb, var(--owner-color) 15%, transparent) 0%, color-mix(in srgb, var(--owner-color) 9%, transparent) 48%, color-mix(in srgb, var(--owner-color) 3%, transparent) 68%, transparent 82%); pointer-events: none; }
+  .player-area.is-you { background: radial-gradient(ellipse at center, color-mix(in srgb, var(--owner-color) 22%, transparent) 0%, color-mix(in srgb, var(--owner-color) 13%, transparent) 48%, color-mix(in srgb, var(--owner-color) 4%, transparent) 68%, transparent 82%); }
   .player-area > span { position: absolute; top: .45rem; left: .65rem; padding: .3rem .55rem; border: 2px solid var(--owner-color); border-radius: 999px; background: rgba(255,253,243,.94); color: var(--tr-ink); font: 900 .72rem/1 ui-sans-serif, system-ui, sans-serif; letter-spacing: .04em; text-transform: uppercase; }
   .letter-tile { display: grid; place-items: center; width: 48px; height: 48px; padding: 0; border: 2px solid var(--tr-ink); border-radius: 6px; background: #fffdf3; color: var(--tr-ink); box-shadow: inset 0 -5px 0 var(--owner-color), 3px 3px 0 #8b7c54; font: 800 1.45rem/1 Georgia, serif; cursor: grab; user-select: none; touch-action: none; transform: rotate(var(--tile-rotation, 0rad)); }
   .board-layer > .letter-tile { position: absolute; z-index: 2; }
@@ -373,6 +383,9 @@
   .game-menu-dialog, .invite-dialog { width: min(520px, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; border: 3px solid var(--tr-ink); border-radius: 18px; background: var(--tr-cream); color: var(--tr-ink); padding: 1.4rem; box-shadow: 9px 9px 0 var(--tr-ink); }
   .game-menu-dialog::backdrop, .invite-dialog::backdrop { background: rgba(23,21,15,.65); backdrop-filter: blur(4px); }
   .game-menu-dialog h2, .invite-dialog h2 { margin: 0 0 .5rem; font: 900 2rem/1 Georgia, serif; }
+  .gesture-help { display: grid; gap: .25rem; padding: .75rem .85rem; border: 1.5px solid var(--tr-ink); border-radius: 10px; background: #fff8d6; }
+  .gesture-help strong { font-size: .9rem; }
+  .gesture-help span { color: #5d543d; font-size: .82rem; line-height: 1.35; }
   .invite-dialog > p:not(.eyebrow) { color: #6b6044; }
   .invite-dialog-actions { display: grid; grid-template-columns: 1fr 1fr; gap: .65rem; margin-top: 1.2rem; }
   .invite-dialog-actions button { min-height: 3rem; border: 2px solid var(--tr-ink); border-radius: 9px; background: #fff; color: var(--tr-ink); box-shadow: 2px 2px 0 var(--tr-ink); font-weight: 800; }

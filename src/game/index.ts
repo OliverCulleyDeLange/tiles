@@ -33,6 +33,7 @@ interface LocalTile extends Tile { x: number | null; y: number | null }
 interface Point { x: number; y: number }
 interface Camera { x: number; y: number; scale: number; rotation: number }
 interface Gesture { center: Point; distance: number; angle: number; camera: Camera; world?: Point; rotate?: boolean }
+interface TouchGesture { ids: [number, number]; center: Point; distance: number; angle: number; camera: Camera; world: Point }
 interface FoundWord { text: string; tileIds: string[] }
 interface EditSnapshot {
   positions: Array<{ id: string; x: number | null; y: number | null }>;
@@ -93,7 +94,7 @@ export function createTiles(root: HTMLElement): void {
   const chatSend = root.querySelector<HTMLButtonElement>('[data-chat-send]')!;
   const board = root.querySelector<HTMLElement>('[data-board]')!;
   const boardLayer = root.querySelector<HTMLElement>('[data-board-layer]')!;
-  const boardLabel = root.querySelector<HTMLElement>('[data-board-label]')!;
+  const playerScroll = root.querySelector<HTMLElement>('[data-player-scroll]')!;
   const rack = root.querySelector<HTMLElement>('[data-rack]')!;
   const rackWrap = root.querySelector<HTMLElement>('.rack-wrap')!;
   const dump = root.querySelector<HTMLButtonElement>('[data-dump]')!;
@@ -215,6 +216,7 @@ export function createTiles(root: HTMLElement): void {
   const pointers = new Map<number, Point>();
   let gesture: Gesture | null = null;
   let nativeGesture: { camera: Camera; x: number; y: number } | null = null;
+  let touchGesture: TouchGesture | null = null;
   let lastCanvasTap: { x: number; y: number; at: number } | null = null;
   let canvasPress: { pointerId: number; x: number; y: number; moved: boolean } | null = null;
   let marquee: { pointerId: number; start: Point; current: Point; element: HTMLElement } | null = null;
@@ -679,7 +681,7 @@ export function createTiles(root: HTMLElement): void {
         syncOwnBoard(state!);
         clearEditHistory();
       }
-      if (!dragging && !gesture && !nativeGesture) renderTiles();
+      if (!dragging && !gesture && !nativeGesture && !touchGesture) renderTiles();
     } else if (message.t === 'hand') {
       applyHand(message.tiles, message.replace);
     } else if (message.t === 'peel-result') {
@@ -1678,6 +1680,7 @@ export function createTiles(root: HTMLElement): void {
     players.innerHTML = next.players.map((player, index) =>
       `<li><button type="button" data-view-player="${escapeHtml(player.id)}" class="player-chip ${player.id === myId ? 'is-you' : ''} ${viewingPlayerId === player.id ? 'is-viewing' : ''} ${player.eliminated ? 'is-out' : ''} ${player.connected === false ? 'is-offline' : ''}" style="--owner-color:${ownerColor(index)}"><i></i><span>${escapeHtml(player.name)}</span><b>${player.connected === false ? 'OFFLINE' : player.eliminated ? 'OUT' : `${player.tilesLeft} loose`}</b></button></li>`
     ).join('');
+    requestAnimationFrame(updatePlayerScrollFades);
     renderPlayerDisconnect(next);
     const connectedPlayers = next.players.filter(player => player.connected !== false).length;
     start.hidden = myId !== next.hostId;
@@ -1746,7 +1749,6 @@ export function createTiles(root: HTMLElement): void {
     boardLayer.querySelectorAll('.player-area').forEach(node => node.remove());
     boardLayer.querySelectorAll('.autofill-arrow').forEach(node => node.remove());
     rack.innerHTML = '';
-    boardLabel.textContent = `Shared table · ${Math.round(camera.scale * 100)}% · drag, pinch and twist`;
 
     for (const [playerIndex, player] of (state?.players ?? []).entries()) {
       const color = ownerColor(playerIndex);
@@ -1874,7 +1876,7 @@ export function createTiles(root: HTMLElement): void {
 
   function moveDrag(event: PointerEvent): void {
     if (!dragging) return;
-    if (pointers.size > 1 || gesture?.distance) {
+    if (touchGesture || pointers.size > 1 || gesture?.distance) {
       cancelDrag();
       return;
     }
@@ -2418,7 +2420,12 @@ export function createTiles(root: HTMLElement): void {
 
   function applyCamera(): void {
     boardLayer.style.transform = `translate(${camera.x}px, ${camera.y}px) rotate(${camera.rotation}rad) scale(${camera.scale})`;
-    boardLabel.textContent = `Shared table · ${Math.round(camera.scale * 100)}% · drag, pinch and twist`;
+  }
+
+  function updatePlayerScrollFades(): void {
+    const overflow = players.scrollWidth - players.clientWidth;
+    playerScroll.classList.toggle('can-scroll-left', players.scrollLeft > 2);
+    playerScroll.classList.toggle('can-scroll-right', overflow > 2 && players.scrollLeft < overflow - 2);
   }
 
   function screenToWorld(clientX: number, clientY: number): Point {
@@ -2516,6 +2523,37 @@ export function createTiles(root: HTMLElement): void {
     };
   }
 
+  function gestureFromTouches(touches: TouchList, ids?: [number, number]): { ids: [number, number]; center: Point; distance: number; angle: number } | null {
+    const values = Array.from(touches);
+    const pair = ids
+      ? ids.map(id => values.find(touch => touch.identifier === id))
+      : values.slice(0, 2);
+    const [a, b] = pair;
+    if (!a || !b) return null;
+    return {
+      ids: [a.identifier, b.identifier],
+      center: { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 },
+      distance: Math.max(1, Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY)),
+      angle: Math.atan2(b.clientY - a.clientY, b.clientX - a.clientX),
+    };
+  }
+
+  function applyTouchGesture(current: { center: Point; distance: number; angle: number }): void {
+    if (!touchGesture) return;
+    const rect = board.getBoundingClientRect();
+    const scale = clamp(touchGesture.camera.scale * current.distance / touchGesture.distance, MIN_SCALE, MAX_SCALE);
+    const rotation = touchGesture.camera.rotation + current.angle - touchGesture.angle;
+    const cosine = Math.cos(rotation);
+    const sine = Math.sin(rotation);
+    camera.scale = scale;
+    camera.rotation = rotation;
+    camera.x = current.center.x - rect.left - rect.width / 2
+      - (touchGesture.world.x * cosine - touchGesture.world.y * sine) * scale;
+    camera.y = current.center.y - rect.top - rect.height / 2
+      - (touchGesture.world.x * sine + touchGesture.world.y * cosine) * scale;
+    applyCamera();
+  }
+
   function resetPointerGesture(): void {
     for (const pointerId of pointers.keys()) {
       try {
@@ -2589,6 +2627,7 @@ export function createTiles(root: HTMLElement): void {
     finishMarquee(true);
     resetPointerGesture();
     nativeGesture = null;
+    touchGesture = null;
   }
 
   nameForm.addEventListener('submit', event => {
@@ -2721,6 +2760,7 @@ export function createTiles(root: HTMLElement): void {
   });
 
   board.addEventListener('pointerdown', event => {
+    if (touchGesture) return;
     if ((event.target as HTMLElement).closest('.letter-tile, [data-board-controls]')) return;
     if (marquee && marquee.pointerId !== event.pointerId) {
       const first = marquee;
@@ -2783,6 +2823,7 @@ export function createTiles(root: HTMLElement): void {
     event.preventDefault();
   }, { capture: true });
   board.addEventListener('pointermove', event => {
+    if (touchGesture) return;
     if (marquee?.pointerId === event.pointerId) {
       updateMarquee(event);
       event.preventDefault();
@@ -2857,6 +2898,7 @@ export function createTiles(root: HTMLElement): void {
   board.addEventListener('gesturestart', raw => {
     const event = raw as Event & { clientX?: number; clientY?: number };
     event.preventDefault();
+    if (touchGesture) return;
     cancelDrag();
     finishMarquee(true);
     resetPointerGesture();
@@ -2868,12 +2910,52 @@ export function createTiles(root: HTMLElement): void {
     };
   }, { passive: false });
   root.addEventListener('touchstart', event => {
-    if (event.touches.length < 2 || !dragging) return;
+    if (event.touches.length < 2) return;
+    if (touchGesture) {
+      event.preventDefault();
+      return;
+    }
+    const initial = gestureFromTouches(event.touches);
+    if (!initial) return;
+    const rect = board.getBoundingClientRect();
+    const touchesBoard = Array.from(event.touches).some(touch => pointInRect(touch.clientX, touch.clientY, rect));
+    if (!touchesBoard && !dragging?.wasPlaced && !gesture && !marquee) return;
+    event.preventDefault();
     cancelDrag();
-    canvasPress = null;
-  }, { capture: true, passive: true });
+    finishMarquee(false);
+    resetPointerGesture();
+    nativeGesture = null;
+    const gestureCamera = { ...camera };
+    touchGesture = {
+      ...initial,
+      camera: gestureCamera,
+      world: screenToWorldFor(initial.center.x, initial.center.y, gestureCamera),
+    };
+    board.classList.add('is-panning');
+  }, { capture: true, passive: false });
+  root.addEventListener('touchmove', event => {
+    if (!touchGesture) return;
+    const current = gestureFromTouches(event.touches, touchGesture.ids);
+    if (!current) return;
+    event.preventDefault();
+    applyTouchGesture(current);
+  }, { capture: true, passive: false });
+  const endTouchGesture = (event: TouchEvent) => {
+    if (!touchGesture) return;
+    const current = gestureFromTouches(event.touches, touchGesture.ids);
+    if (current) return;
+    event.preventDefault();
+    touchGesture = null;
+    resetPointerGesture();
+  };
+  root.addEventListener('touchend', endTouchGesture, { capture: true, passive: false });
+  root.addEventListener('touchcancel', endTouchGesture, { capture: true, passive: false });
   board.addEventListener('gesturechange', raw => {
     const event = raw as Event & { scale?: number; rotation?: number };
+    if (touchGesture) {
+      event.preventDefault();
+      return;
+    }
     if (!nativeGesture) return;
     event.preventDefault();
     transformAt(
@@ -2884,6 +2966,7 @@ export function createTiles(root: HTMLElement): void {
     );
   }, { passive: false });
   const endNativeGesture = () => {
+    if (touchGesture) return;
     nativeGesture = null;
     resetPointerGesture();
   };
@@ -2898,6 +2981,7 @@ export function createTiles(root: HTMLElement): void {
     const chip = (event.target as HTMLElement).closest<HTMLElement>('[data-view-player]');
     if (chip?.dataset.viewPlayer) focusPlayer(chip.dataset.viewPlayer);
   });
+  players.addEventListener('scroll', updatePlayerScrollFades, { passive: true });
   fillDirection.addEventListener('click', () => {
     autoFillDirection = autoFillDirection === 'right' ? 'down' : 'right';
     updateFillDirectionButton();
@@ -2985,7 +3069,10 @@ export function createTiles(root: HTMLElement): void {
       retryConnection.disabled = false;
     }
   });
-  window.addEventListener('resize', applyCamera);
+  window.addEventListener('resize', () => {
+    applyCamera();
+    updatePlayerScrollFades();
+  });
   window.setInterval(() => {
     if (connectionMode === 'online') send({ t: 'ping' });
   }, 25_000);
