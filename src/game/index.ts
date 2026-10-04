@@ -1577,12 +1577,18 @@ export function createTiles(root: HTMLElement): void {
       }
       if (restored) {
         // Endpoint IDs are ephemeral. A saved player must be freshly discovered
-        // before we offer an invitation for the restored game.
+        // before we offer an invitation for the restored game. Discovery may
+        // already be active on the home screen, so force a real restart rather
+        // than relying on startDiscovery(), which is intentionally idempotent
+        // in the native plugins and would not emit already-found endpoints.
+        await NearbyConnections.stopDiscovery().catch(() => undefined);
         nearbyEndpointMap.clear();
         selectedNearbyIds.clear();
         outgoingNearbyInvites.clear();
         pendingReinviteNames.clear();
         nearbyInviteStates.clear();
+        await wait(350);
+        diagnose('nearby-resume-discovery-restart', { playerCount: restored.players.length });
         await NearbyConnections.startDiscovery({ name });
       }
       roomName = 'nearby';
