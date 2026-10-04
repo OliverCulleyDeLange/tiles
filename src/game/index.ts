@@ -181,6 +181,8 @@ export function createTiles(root: HTMLElement): void {
   let nearbyHomeRefreshTimer: number | null = null;
   let nearbyHomeGeneration = 0;
   let nearbyName = '';
+  let nearbyTransportStarting = false;
+  let nearbySuspendStop: Promise<void> | null = null;
   let nearbyPermissionAliases: string[] | undefined;
   const selectedNearbyIds = new Set<string>();
   const outgoingNearbyInvites = new Set<string>();
@@ -1264,7 +1266,8 @@ export function createTiles(root: HTMLElement): void {
   }
 
   function scheduleNearbyTransport(delay?: number): void {
-    if (nearbyReconnectTimer != null || (connectionMode !== 'nearby-host' && connectionMode !== 'nearby-join')) return;
+    if (nearbySuspended || nearbyReconnectTimer != null
+      || (connectionMode !== 'nearby-host' && connectionMode !== 'nearby-join')) return;
     const wait = delay ?? Math.min(8_000, 500 * 2 ** Math.min(nearbyReconnectAttempt++, 4));
     nearbyReconnectTimer = window.setTimeout(() => {
       nearbyReconnectTimer = null;
@@ -1273,19 +1276,23 @@ export function createTiles(root: HTMLElement): void {
   }
 
   async function resumeNearbyTransport(): Promise<void> {
-    if (connectionMode !== 'nearby-host' && connectionMode !== 'nearby-join') return;
+    if (nearbySuspended || nearbyTransportStarting
+      || (connectionMode !== 'nearby-host' && connectionMode !== 'nearby-join')) return;
+    nearbyTransportStarting = true;
     try {
       await NearbyConnections.setKeepAwake({ enabled: true });
       if (connectionMode === 'nearby-host') {
-        await NearbyConnections.stopAdvertising().catch(() => undefined);
-        await wait(250);
         if (connectionMode !== 'nearby-host') return;
         await NearbyConnections.startAdvertising({ name: nearbyWireName() });
         nearbyReconnectAttempt = 0;
         return;
       }
       if (nearbyHostId) return;
-      await NearbyConnections.stopDiscovery();
+      // Recreate the Nearby manager, not just its discoverer. iOS otherwise
+      // retains the host's pre-background endpoint and may never emit it again.
+      await NearbyConnections.stop().catch(error => diagnose('nearby-reconnect-stop-failed', nearbyErrorDetail(error)));
+      if (connectionMode !== 'nearby-join' || nearbySuspended || nearbyHostId) return;
+      nearbyConnectingId = null;
       await NearbyConnections.startDiscovery({ name: nearbyWireName() });
       nearbyAutoReconnect = true;
       clearNearbyReconnectTimer();
@@ -1295,6 +1302,8 @@ export function createTiles(root: HTMLElement): void {
       }, 8_000);
     } catch {
       scheduleNearbyTransport();
+    } finally {
+      nearbyTransportStarting = false;
     }
   }
 
@@ -3655,7 +3664,8 @@ export function createTiles(root: HTMLElement): void {
       if (isNativeNearby() && (connectionMode === 'nearby-host' || connectionMode === 'nearby-join')) {
         nearbySuspended = true;
         diagnose('app-backgrounded', { connectionMode });
-        void NearbyConnections.stop().catch(error => diagnose('background-stop-failed', nearbyErrorDetail(error)));
+        nearbySuspendStop = NearbyConnections.stop()
+          .catch(error => diagnose('background-stop-failed', nearbyErrorDetail(error)));
       }
       return;
     }
@@ -3663,7 +3673,12 @@ export function createTiles(root: HTMLElement): void {
     if (nearbySuspended) {
       nearbySuspended = false;
       diagnose('app-foregrounded', { connectionMode });
-      void resumeNearbyTransport();
+      const stopped = nearbySuspendStop;
+      nearbySuspendStop = null;
+      void (async () => {
+        await stopped;
+        await resumeNearbyTransport();
+      })();
       return;
     }
     if (connectionMode === 'nearby-home') {
