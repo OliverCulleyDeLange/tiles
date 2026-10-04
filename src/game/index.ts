@@ -1585,7 +1585,13 @@ export function createTiles(root: HTMLElement): void {
         nearbyConnectingId = invitation.endpointId;
         nearbyAutoReconnect = true;
         showNearbyLobbyLoading(invitation.name);
-        await NearbyConnections.stopDiscovery().catch(() => undefined);
+        // Home mode deliberately advertises and discovers at the same time.
+        // Quiesce both roles before accepting the verification so iOS does not
+        // tear down its advertiser while the first app handshake is in flight.
+        await Promise.all([
+          NearbyConnections.stopDiscovery(),
+          NearbyConnections.stopAdvertising(),
+        ]);
       }
       await NearbyConnections.acceptVerification({ endpointId: invitation.endpointId, accept });
       nearbyStatus.textContent = accept ? `Joining ${invitation.name}'s game…` : `Declined ${invitation.name}'s game.`;
@@ -1860,7 +1866,7 @@ export function createTiles(root: HTMLElement): void {
       if (connectionMode === 'nearby-home') showNearbyInvitation(verification);
       else void NearbyConnections.acceptVerification({ endpointId: verification.endpointId, accept: false });
     });
-    await NearbyConnections.addListener('connected', rawEndpoint => {
+    await NearbyConnections.addListener('connected', async rawEndpoint => {
       const endpoint = decodeNearbyEndpoint(rawEndpoint);
       clearNearbyConnectionAttemptTimer();
       clearNearbyChannel(endpoint.endpointId);
@@ -1876,8 +1882,12 @@ export function createTiles(root: HTMLElement): void {
           renderPlayerDisconnect(state);
         }
         if (outgoingNearbyInvites.size === 0) {
-          void NearbyConnections.stopDiscovery();
-          void NearbyConnections.startAdvertising({ name: nearbyWireName() });
+          await NearbyConnections.stopDiscovery().catch(error => {
+            diagnose('nearby-host-stop-discovery-failed', nearbyErrorDetail(error));
+          });
+          await NearbyConnections.startAdvertising({ name: nearbyWireName() }).catch(error => {
+            diagnose('nearby-host-advertising-restart-failed', nearbyErrorDetail(error));
+          });
         }
         nearbyReconnectAttempt = 0;
         nearbyStatus.textContent = `${endpoint.name} connected.`;
@@ -1897,8 +1907,11 @@ export function createTiles(root: HTMLElement): void {
       nearbyConnectingId = null;
       nearbyHostId = endpoint.endpointId;
       nearbyHostName = endpoint.name;
-      void NearbyConnections.stopAdvertising();
-      void NearbyConnections.stopDiscovery();
+      await Promise.all([
+        NearbyConnections.stopAdvertising(),
+        NearbyConnections.stopDiscovery(),
+      ]).catch(error => diagnose('nearby-guest-radio-stop-failed', nearbyErrorDetail(error)));
+      if (connectionMode !== 'nearby-join' || nearbyHostId !== endpoint.endpointId) return;
       enterNearbyGuest(endpoint);
     });
     await NearbyConnections.addListener('disconnected', rawEndpoint => {
