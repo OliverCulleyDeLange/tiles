@@ -30,8 +30,9 @@ npm install
 npm run dev
 ```
 
-Deployment requires `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` repository secrets.
-The Worker accepts browser connections from `oliverdelange.co.uk` and its `www` host.
+Production deployments are handled by Cloudflare Builds from the `worker/`
+directory whenever relevant changes land on `main`. The Worker accepts browser
+connections from `oliverdelange.co.uk` and its `www` host.
 
 ## Native nearby play
 
