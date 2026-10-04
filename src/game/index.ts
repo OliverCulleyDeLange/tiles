@@ -781,6 +781,7 @@ export function createTiles(root: HTMLElement): void {
   }
 
   const nearbyEndpointMap = new Map<string, NearbyEndpoint>();
+  const nearbyEndpointLossTimers = new Map<string, number>();
   const localPeerId = `local-${crypto.randomUUID().slice(0, 8)}`;
 
   function clearNearbyReconnectTimer(): void {
@@ -1311,18 +1312,19 @@ export function createTiles(root: HTMLElement): void {
       label.append(checkbox, text);
       nearbyEndpoints.append(label);
     }
-    if (!nearbyEndpointMap.size) {
+    const searchActive = nearbyHomePhase === 'starting' || nearbyHomePhase === 'visible' || nearbyHomePhase === 'searching';
+    if (!nearbyEndpointMap.size || searchActive) {
       const searching = document.createElement('div');
-      searching.className = 'nearby-search';
-      const message = nearbyHomePhase === 'permission' ? 'Nearby permission required · accept access to continue'
+      searching.className = `nearby-search${nearbyEndpointMap.size ? ' is-inline' : ''}`;
+      const message = nearbyEndpointMap.size && searchActive ? 'Still searching for more players…'
+        : nearbyHomePhase === 'permission' ? 'Nearby permission required · accept access to continue'
         : nearbyHomePhase === 'permission-required' ? 'Nearby permission required'
         : nearbyHomePhase === 'starting' ? 'Starting nearby radios…'
         : nearbyHomePhase === 'visible' ? 'Visible nearby · preparing search…'
         : nearbyHomePhase === 'searching' ? 'Searching nearby…'
         : nearbyHomePhase === 'failed' ? 'Nearby search could not start'
         : 'Nearby search has not started';
-      const active = nearbyHomePhase === 'starting' || nearbyHomePhase === 'visible' || nearbyHomePhase === 'searching';
-      searching.innerHTML = `${active ? '<span aria-hidden="true">…</span>' : ''}<p>${message}</p>`;
+      searching.innerHTML = `${searchActive ? '<span aria-hidden="true">…</span>' : ''}<p>${message}</p>`;
       if (nearbyHomePhase === 'permission-required') {
         searching.querySelector('span')?.remove();
         const allow = document.createElement('button');
@@ -1350,6 +1352,7 @@ export function createTiles(root: HTMLElement): void {
     pendingNearbyInvite = invitation;
     inviteName.textContent = invitation.name;
     inviteDialog.showModal();
+    requestAnimationFrame(() => inviteAccept.focus());
   }
 
   async function answerNearbyInvitation(accept: boolean): Promise<void> {
@@ -1450,7 +1453,9 @@ export function createTiles(root: HTMLElement): void {
     nearbyEntry.hidden = false;
 
     await NearbyConnections.addListener('endpointFound', endpoint => {
-      if (connectionMode === 'nearby-home') clearNearbyHomeRefreshTimer(false);
+      const lossTimer = nearbyEndpointLossTimers.get(endpoint.endpointId);
+      if (lossTimer != null) window.clearTimeout(lossTimer);
+      nearbyEndpointLossTimers.delete(endpoint.endpointId);
       const previousTransport = nearbyPeerStates.get(nearbyPeerKey(endpoint.name));
       if (!previousTransport || ['searching', 'disconnected', 'failed'].includes(previousTransport.phase)) {
         setNearbyPeerState(endpoint.name, 'found', 'Nearby advertisement found · endpoint is reachable');
@@ -1490,17 +1495,26 @@ export function createTiles(root: HTMLElement): void {
     await NearbyConnections.addListener('endpointLost', endpoint => {
       const connectionPending = outgoingNearbyInvites.has(endpoint.endpointId)
         || nearbyConnectingId === endpoint.endpointId;
-      nearbyEndpointMap.delete(endpoint.endpointId);
-      selectedNearbyIds.delete(endpoint.endpointId);
-      // Discovery loss does not mean connection loss. Nearby often removes an
-      // advertisement while the connection handshake is still progressing.
-      if (!connectionPending) nearbyInviteStates.delete(endpoint.endpointId);
-      renderNearbyEndpoints();
-      if (connectionMode === 'nearby-home' && nearbyEndpointMap.size === 0) scheduleNearbyHomeRefresh();
-      if (state && connectionMode === 'nearby-host') {
-        renderLobbyRoster(state);
-        renderPlayerDisconnect(state);
-      }
+      const previousTimer = nearbyEndpointLossTimers.get(endpoint.endpointId);
+      if (previousTimer != null) window.clearTimeout(previousTimer);
+      // Wi-Fi LAN advertisements can briefly vanish while Nearby changes radio
+      // medium. Keep the player stable long enough for the same endpoint to be
+      // rediscovered instead of making the home list flicker and lose selection.
+      const timer = window.setTimeout(() => {
+        nearbyEndpointLossTimers.delete(endpoint.endpointId);
+        nearbyEndpointMap.delete(endpoint.endpointId);
+        selectedNearbyIds.delete(endpoint.endpointId);
+        // Discovery loss does not mean connection loss. Nearby often removes an
+        // advertisement while the connection handshake is still progressing.
+        if (!connectionPending) nearbyInviteStates.delete(endpoint.endpointId);
+        renderNearbyEndpoints();
+        if (connectionMode === 'nearby-home' && nearbyEndpointMap.size === 0) scheduleNearbyHomeRefresh();
+        if (state && connectionMode === 'nearby-host') {
+          renderLobbyRoster(state);
+          renderPlayerDisconnect(state);
+        }
+      }, 12_000);
+      nearbyEndpointLossTimers.set(endpoint.endpointId, timer);
     });
     await NearbyConnections.addListener('verificationRequired', verification => {
       setNearbyPeerState(verification.name, 'authenticating', 'Secure Nearby handshake · authenticating devices');

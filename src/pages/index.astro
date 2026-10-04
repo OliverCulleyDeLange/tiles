@@ -161,7 +161,7 @@
       <p>Join their local Tiles lobby?</p>
       <div class="invite-dialog-actions">
         <button type="button" data-invite-decline>Decline</button>
-        <button type="button" class="primary-action" data-invite-accept>Accept</button>
+        <button type="button" class="primary-action" data-invite-accept autofocus>Accept</button>
       </div>
     </dialog>
 
@@ -241,6 +241,8 @@
   .nearby-search { display: grid; width: 100%; justify-items: center; gap: .65rem; padding: 1rem 0 .35rem; color: #6b6044; }
   .nearby-search span { display: grid; place-items: center; width: 3rem; aspect-ratio: 1; border: 2px solid var(--tr-ink); border-radius: 7px; background: var(--tr-yellow); color: var(--tr-ink); box-shadow: 3px 3px 0 var(--tr-ink); font: 900 1.6rem/1 Georgia, serif; animation: nearby-tile-spin 1.4s steps(4, end) infinite; }
   .nearby-search p { margin: 0; font-size: .82rem; font-weight: 700; }
+  .nearby-search.is-inline { grid-template-columns: auto 1fr; width: auto; justify-items: start; align-items: center; padding: .2rem .1rem; }
+  .nearby-search.is-inline span { width: 1.65rem; font-size: .9rem; box-shadow: 2px 2px 0 var(--tr-ink); }
   @keyframes nearby-tile-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   .lobby-card header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
   .lobby-card header > div { min-width: 0; }
@@ -382,6 +384,7 @@
   .invite-dialog > p:not(.eyebrow) { color: #6b6044; }
   .invite-dialog-actions { display: grid; grid-template-columns: 1fr 1fr; gap: .65rem; margin-top: 1.2rem; }
   .invite-dialog-actions button { min-height: 3rem; border: 2px solid var(--tr-ink); border-radius: 9px; background: #fff; color: var(--tr-ink); box-shadow: 2px 2px 0 var(--tr-ink); font-weight: 800; }
+  .invite-dialog-actions [data-invite-accept] { background: var(--tr-yellow); box-shadow: 3px 3px 0 var(--tr-ink); }
   button[aria-busy='true'] { opacity: .7; pointer-events: none; }
   button[aria-busy='true']::after { content: ''; display: inline-block; width: .85em; height: .85em; margin-left: .5em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: -.1em; animation: button-spin .7s linear infinite; }
   @keyframes button-spin { to { transform: rotate(360deg); } }
