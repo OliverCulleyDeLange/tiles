@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 export const MAX_PLAYERS = 8;
 export const MAX_NAME_LENGTH = 18;
 export const MAX_MESSAGE_BYTES = 16_384;
@@ -6,6 +6,7 @@ export const DEFAULT_ROOM = '';
 export const PLAYER_AREA_WIDTH = 16;
 export const PLAYER_AREA_HEIGHT = 11;
 export const DICTIONARY_IDS = ['scowl-us', 'scowl-gb', 'de', 'es', 'it', 'fr', 'pt'] as const;
+export const PLAYER_COLORS = ['#ff664d', '#2478d4', '#1b8b58', '#9a55cc', '#e58b18', '#d14486', '#008b95', '#735c3b'] as const;
 export type DictionaryId = typeof DICTIONARY_IDS[number];
 
 export function isDictionaryId(value: unknown): value is DictionaryId {
@@ -31,6 +32,7 @@ export interface PlayerArea {
 export interface PlayerSummary {
   id: string;
   name: string;
+  color?: string;
   connected?: boolean;
   tilesLeft: number;
   tiles: Tile[];
@@ -84,7 +86,7 @@ export interface RoomSnapshot {
 }
 
 export type ClientMessage =
-  | { t: 'hello'; v: number; name: string; resumeToken?: string }
+  | { t: 'hello'; v: number; name: string; color?: string; resumeToken?: string }
   | { t: 'chat'; id: string; text: string }
   | { t: 'chat-receipt'; messageId: string; senderId: string; status: 'received' | 'read' }
   | { t: 'dictionary'; dictionary: DictionaryId }
@@ -94,6 +96,7 @@ export type ClientMessage =
   | { t: 'peel'; peel: number; board: PlacedTile[] }
   | { t: 'dump'; tileId: string }
   | { t: 'review'; rotten: boolean }
+  | { t: 'heartbeat-ack'; id: string; sentAt: number }
   | { t: 'ping' };
 
 export type ServerMessage =
@@ -112,6 +115,8 @@ export type ServerMessage =
   | { t: 'chat'; id: string; playerId: string; name: string; text: string; at: number }
   | { t: 'chat-receipt'; messageId: string; playerId: string; status: 'received' | 'read' }
   | { t: 'toast'; text: string; tone?: 'good' | 'bad' | 'plain' }
+  | { t: 'heartbeat'; id: string; sentAt: number }
+  | { t: 'heartbeat-status'; playerId: string; status: 'checking' | 'available' | 'unavailable'; latencyMs?: number; at: number }
   | { t: 'error'; message: string }
   | { t: 'pong' };
 
@@ -121,6 +126,10 @@ export function sanitizeName(raw: unknown): string {
   if (typeof raw !== 'string') return '';
   return Array.from(raw.replace(INVISIBLE, '').replace(/\s+/g, ' ').trim())
     .slice(0, MAX_NAME_LENGTH).join('');
+}
+
+export function sanitizePlayerColor(raw: unknown): string {
+  return typeof raw === 'string' && (PLAYER_COLORS as readonly string[]).includes(raw) ? raw : PLAYER_COLORS[0];
 }
 
 export function sanitizeChatText(raw: unknown): string {

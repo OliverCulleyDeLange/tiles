@@ -1,10 +1,12 @@
 import {
   PLAYER_AREA_HEIGHT,
   PLAYER_AREA_WIDTH,
+  PLAYER_COLORS,
   PROTOCOL_VERSION,
   createPlayerAreas,
   isDictionaryId,
   sanitizeName,
+  sanitizePlayerColor,
   sanitizeRoom,
   type ClientMessage,
   type DictionaryId,
@@ -49,10 +51,20 @@ interface SavedGame {
   playerNames: string[];
   updatedAt: number;
 }
+interface SavedLocalSession {
+  version: 1;
+  role: 'participant';
+  name: string;
+  hostName: string;
+  playerNames: string[];
+  phase: RoomSnapshot['phase'];
+  updatedAt: number;
+}
 interface PendingChatMessage { text: string; attempts: number; timer: number | null }
 
 const SAVED_GAMES_KEY = 'tiles-saved-games-v1';
 const LOCAL_GAME_KEY = 'tiles-local-game-v1';
+const LOCAL_SESSION_KEY = 'tiles-local-session-v1';
 const MAX_SAVED_GAMES = 8;
 
 const dictionaryFile = (name: string) => `${DICTIONARY_BASE}/${name}.txt${ANDROID_NATIVE ? '' : '.gz'}`;
@@ -72,6 +84,7 @@ export function createTiles(root: HTMLElement): void {
   const game = root.querySelector<HTMLElement>('[data-view="game"]')!;
   const nameForm = root.querySelector<HTMLFormElement>('[data-name-form]')!;
   const nameInput = root.querySelector<HTMLInputElement>('[data-name-input]')!;
+  const colorInputs = Array.from(root.querySelectorAll<HTMLInputElement>('[data-player-colors] input[name="player-color"]'));
   const homeOptions = root.querySelector<HTMLElement>('[data-home-options]')!;
   const enterLobby = root.querySelector<HTMLButtonElement>('[data-enter-lobby]')!;
   const savedGames = root.querySelector<HTMLElement>('[data-saved-games]')!;
@@ -190,6 +203,13 @@ export function createTiles(root: HTMLElement): void {
   let transportSend: ((message: object) => void) | null = null;
   let myId = '';
   let state: RoomSnapshot | null = null;
+  const playerHeartbeats = new Map<string, {
+    status: 'checking' | 'available' | 'unavailable';
+    latencyMs?: number;
+    at: number;
+  }>();
+  const heartbeatSamples = new Map<string, number[]>();
+  let cameraAnimationTimer: number | null = null;
   let tiles: LocalTile[] = [];
   let rackOrder: Array<string | null> = [];
   let selectedId: string | null = null;
@@ -331,7 +351,36 @@ export function createTiles(root: HTMLElement): void {
     localStorage.setItem(LOCAL_GAME_KEY, JSON.stringify(value));
   }
 
+  function readLocalSession(): SavedLocalSession | null {
+    try {
+      const value = JSON.parse(localStorage.getItem(LOCAL_SESSION_KEY) ?? 'null') as Partial<SavedLocalSession> | null;
+      if (!value || value.version !== 1 || value.role !== 'participant') return null;
+      const name = sanitizeName(value.name);
+      const hostName = sanitizeName(value.hostName);
+      if (!name || !hostName || !['lobby', 'playing', 'review', 'finished'].includes(value.phase ?? '')) return null;
+      return {
+        version: 1, role: 'participant', name, hostName,
+        playerNames: Array.isArray(value.playerNames) ? value.playerNames.map(sanitizeName).filter(Boolean).slice(0, 8) : [],
+        phase: value.phase as RoomSnapshot['phase'], updatedAt: typeof value.updatedAt === 'number' ? value.updatedAt : 0,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   function rememberGame(room: RoomSnapshot): void {
+    if (connectionMode === 'nearby-join') {
+      const me = room.players.find(player => player.id === myId);
+      const host = room.players.find(player => player.id === room.hostId);
+      if (me && host && localStorage.getItem('tiles-session:nearby')) {
+        const session: SavedLocalSession = {
+          version: 1, role: 'participant', name: me.name, hostName: host.name,
+          playerNames: room.players.map(player => player.name), phase: room.phase, updatedAt: Date.now(),
+        };
+        localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(session));
+      }
+      return;
+    }
     if (connectionMode !== 'online' || !roomName) return;
     const records = readSavedGames().filter(record => record.room !== roomName);
     const me = room.players.find(player => player.id === myId);
@@ -349,9 +398,10 @@ export function createTiles(root: HTMLElement): void {
 
   function renderSavedGames(): void {
     const local = roomName ? null : readLocalGame();
+    const localSession = roomName ? null : readLocalSession();
     const records = roomName ? [] : readSavedGames();
     savedGameList.replaceChildren();
-    savedGames.hidden = !local && records.length === 0;
+    savedGames.hidden = !local && !localSession && records.length === 0;
     if (local) {
       const item = document.createElement('div');
       item.className = 'saved-game';
@@ -359,6 +409,7 @@ export function createTiles(root: HTMLElement): void {
       open.type = 'button';
       open.className = 'saved-game-open';
       open.dataset.savedKind = 'local';
+      open.dataset.savedRole = 'host';
       const ownToken = localStorage.getItem('tiles-session:nearby');
       const me = local.players.find(player => player.resumeToken === ownToken);
       open.dataset.savedName = me?.name ?? local.players.find(player => player.id === local.hostId)?.name ?? '';
@@ -366,6 +417,29 @@ export function createTiles(root: HTMLElement): void {
       title.textContent = `Local · ${local.players.map(player => player.name).join(', ')}`;
       const detail = document.createElement('span');
       detail.textContent = `On this device · ${local.phase === 'finished' ? 'Finished' : local.phase === 'playing' ? 'In progress' : 'In lobby'} · ${new Date(local.updatedAt).toLocaleString()}`;
+      open.append(title, detail);
+      const forget = document.createElement('button');
+      forget.type = 'button';
+      forget.className = 'saved-game-forget';
+      forget.dataset.forgetLocal = 'true';
+      forget.setAttribute('aria-label', 'Forget local game');
+      forget.textContent = '×';
+      item.append(open, forget);
+      savedGameList.append(item);
+    }
+    if (localSession) {
+      const item = document.createElement('div');
+      item.className = 'saved-game';
+      const open = document.createElement('button');
+      open.type = 'button';
+      open.className = 'saved-game-open';
+      open.dataset.savedKind = 'local';
+      open.dataset.savedRole = 'participant';
+      open.dataset.savedName = localSession.name;
+      const title = document.createElement('strong');
+      title.textContent = `Local · ${localSession.playerNames.join(', ')}`;
+      const detail = document.createElement('span');
+      detail.textContent = `Rejoin ${localSession.hostName} · ${localSession.phase === 'finished' ? 'Finished' : localSession.phase === 'playing' ? 'In progress' : 'In lobby'} · ${new Date(localSession.updatedAt).toLocaleString()}`;
       open.append(title, detail);
       const forget = document.createElement('button');
       forget.type = 'button';
@@ -436,6 +510,14 @@ export function createTiles(root: HTMLElement): void {
     else if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
   }
 
+  function selectedPlayerColor(): string {
+    return sanitizePlayerColor(colorInputs.find(input => input.checked)?.value);
+  }
+
+  function colorForPlayer(player: PlayerSummary | undefined, index = 0): string {
+    return sanitizePlayerColor(player?.color ?? PLAYER_COLORS[index % PLAYER_COLORS.length]);
+  }
+
   function chatIsReadable(): boolean {
     return document.visibilityState === 'visible' && state?.phase === 'lobby' && !lobby.hidden;
   }
@@ -449,7 +531,10 @@ export function createTiles(root: HTMLElement): void {
     if (status === 'not-delivered' && current !== 'sent' && current !== 'not-delivered') return;
     if (status !== 'not-delivered' && current && rank[current] >= rank[status]) return;
     receipt.dataset.status = status;
-    receipt.textContent = status === 'not-delivered' ? 'Not delivered' : status[0].toUpperCase() + status.slice(1);
+    receipt.textContent = status === 'sent' ? '✓' : status === 'not-delivered' ? '!' : '✓✓';
+    const label = status === 'not-delivered' ? 'Not delivered' : status === 'sent' ? 'Sent' : status === 'received' ? 'Delivered' : 'Read';
+    receipt.setAttribute('aria-label', label);
+    receipt.title = label;
   }
 
   function transmitPendingChat(messageId: string): void {
@@ -609,6 +694,23 @@ export function createTiles(root: HTMLElement): void {
   }
 
   function handleServerMessage(message: ServerMessage): void {
+    if (message.t === 'heartbeat') {
+      send({ t: 'heartbeat-ack', id: message.id, sentAt: message.sentAt });
+      return;
+    }
+    if (message.t === 'heartbeat-status') {
+      playerHeartbeats.set(message.playerId, {
+        status: message.status, latencyMs: message.latencyMs, at: message.at,
+      });
+      if (message.status === 'available' || message.status === 'unavailable') {
+        const samples = heartbeatSamples.get(message.playerId) ?? [];
+        samples.push(message.status === 'available' ? (message.latencyMs ?? 0) : -1);
+        heartbeatSamples.set(message.playerId, samples.slice(-12));
+      }
+      if (state?.phase === 'lobby') renderLobbyRoster(state);
+      else if (state) pulsePlayerHeartbeat(message.playerId, message.status === 'unavailable');
+      return;
+    }
     if (message.t === 'welcome') {
       myId = message.id;
       viewingPlayerId ??= myId;
@@ -641,6 +743,8 @@ export function createTiles(root: HTMLElement): void {
       row.dataset.messageId = messageId;
       const author = document.createElement('strong');
       author.textContent = message.playerId === myId ? 'You' : message.name;
+      const chatPlayer = state?.players.find(player => player.id === message.playerId);
+      author.style.color = colorForPlayer(chatPlayer, Math.max(0, state?.players.findIndex(player => player.id === message.playerId) ?? 0));
       const text = document.createElement('span');
       text.textContent = message.text;
       const time = document.createElement('time');
@@ -652,8 +756,10 @@ export function createTiles(root: HTMLElement): void {
         receipt.className = 'chat-receipt';
         receipt.dataset.chatReceipt = messageId;
         receipt.dataset.status = 'sent';
-        receipt.textContent = 'Sent';
-        row.append(receipt);
+        receipt.textContent = '✓';
+        receipt.setAttribute('aria-label', 'Sent');
+        receipt.title = 'Sent';
+        time.append(receipt);
       }
       chatLog.append(row);
       while (chatLog.children.length > 60) chatLog.firstElementChild?.remove();
@@ -719,7 +825,7 @@ export function createTiles(root: HTMLElement): void {
     socket = connection;
     connection.addEventListener('open', () => {
       const resumeToken = localStorage.getItem(sessionKey()) ?? undefined;
-      connection.send(JSON.stringify({ t: 'hello', v: PROTOCOL_VERSION, name, resumeToken } satisfies ClientMessage));
+      connection.send(JSON.stringify({ t: 'hello', v: PROTOCOL_VERSION, name, color: selectedPlayerColor(), resumeToken } satisfies ClientMessage));
     });
     connection.addEventListener('message', event => {
       if (typeof event.data !== 'string') return;
@@ -1047,7 +1153,7 @@ export function createTiles(root: HTMLElement): void {
     if (connectionMode !== 'nearby-join' || !nearbyHostId || myId) return;
     if (nearbyHostName) setNearbyPeerState(nearbyHostName, 'syncing', 'Transport connected · sending app handshake');
     const resumeToken = localStorage.getItem(sessionKey()) ?? undefined;
-    sendNearby(nearbyHostId, { t: 'hello', v: PROTOCOL_VERSION, name: nearbyName, resumeToken });
+    sendNearby(nearbyHostId, { t: 'hello', v: PROTOCOL_VERSION, name: nearbyName, color: selectedPlayerColor(), resumeToken });
     clearNearbyHelloTimer();
     nearbyHelloTimer = window.setTimeout(sendNearbyHello, 900);
   }
@@ -1067,9 +1173,6 @@ export function createTiles(root: HTMLElement): void {
       await NearbyConnections.setKeepAwake({ enabled: true });
       if (connectionMode === 'nearby-host') {
         await NearbyConnections.startAdvertising({ name: nearbyName });
-        if (state?.phase === 'lobby' && state.players.some(player => player.connected === false)) {
-          await NearbyConnections.startDiscovery({ name: nearbyName });
-        }
         nearbyReconnectAttempt = 0;
         return;
       }
@@ -1125,49 +1228,63 @@ export function createTiles(root: HTMLElement): void {
     if (state?.phase === 'lobby') renderLobbyRoster(state);
   }
 
-  function nearbyPlayerDetail(player: PlayerSummary, room: RoomSnapshot): { phase: string; detail: string } | null {
-    if (connectionMode === 'online') {
-      return {
-        phase: player.connected === false ? 'disconnected' : 'synced',
-        detail: player.connected === false ? 'Cloud WebSocket disconnected' : 'Cloud lobby synced',
-      };
-    }
-    if (connectionMode !== 'nearby-host' && connectionMode !== 'nearby-join') return null;
-    if (player.id === myId) {
-      return {
-        phase: 'self',
-        detail: connectionMode === 'nearby-host'
-          ? 'Advertising via Nearby · Bluetooth/Wi-Fi managed by OS'
-          : 'Nearby transport connected · medium managed by OS',
-      };
-    }
-    const transport = nearbyPeerStates.get(nearbyPeerKey(player.name));
-    if (transport) return transport;
-    if (player.connected === false) {
-      return {
-        phase: 'disconnected',
-        detail: room.phase === 'lobby' ? 'Link lost · ready to search again' : 'Nearby link disconnected',
-      };
-    }
-    return { phase: 'synced', detail: 'Nearby link connected · lobby synced' };
+  function heartbeatAvailability(player: PlayerSummary): {
+    status: 'checking' | 'available' | 'unavailable' | 'disconnected';
+    text: string;
+  } {
+    if (player.connected === false) return { status: 'disconnected', text: 'Disconnected · unavailable' };
+    if (connectionMode === 'online') return { status: 'available', text: 'Connected · available' };
+    const heartbeat = playerHeartbeats.get(player.id);
+    if (!heartbeat || heartbeat.status === 'checking') return { status: 'checking', text: 'Connected · checking availability…' };
+    if (heartbeat.status === 'unavailable') return { status: 'unavailable', text: 'Connected · not responding' };
+    return {
+      status: 'available',
+      text: `Connected · available${heartbeat.latencyMs == null || heartbeat.latencyMs === 0 ? '' : ` · ${heartbeat.latencyMs} ms`}`,
+    };
+  }
+
+  function heartbeatGraph(playerId: string, unavailable: boolean): string {
+    const samples = heartbeatSamples.get(playerId) ?? [];
+    const visible = [...Array(Math.max(0, 12 - samples.length)).fill(-1), ...samples.slice(-12)] as number[];
+    let path = 'M 0 18';
+    visible.forEach((sample, index) => {
+      const x = 5 + index * 6.7;
+      if (sample < 0) path += ` L ${x.toFixed(1)} 18`;
+      else {
+        const peak = Math.max(4, 10 - Math.min(sample, 300) / 50);
+        path += ` L ${(x - 2.4).toFixed(1)} 18 L ${(x - 1.2).toFixed(1)} ${peak.toFixed(1)} L ${x.toFixed(1)} 22 L ${(x + 1.7).toFixed(1)} 18`;
+      }
+    });
+    return `<svg class="heartbeat-monitor${unavailable ? ' is-unavailable' : ''}" viewBox="0 0 82 26" aria-label="Recent availability"><path d="${path}"></path></svg>`;
+  }
+
+  function pulsePlayerHeartbeat(playerId: string, unavailable: boolean): void {
+    const chip = Array.from(players.querySelectorAll<HTMLElement>('[data-view-player]'))
+      .find(candidate => candidate.dataset.viewPlayer === playerId);
+    const dot = chip?.querySelector<HTMLElement>('i');
+    if (!dot) return;
+    dot.classList.toggle('is-unavailable', unavailable);
+    if (unavailable) return;
+    dot.classList.remove('heartbeat-pulse');
+    void dot.offsetWidth;
+    dot.classList.add('heartbeat-pulse');
   }
 
   function renderLobbyRoster(room: RoomSnapshot): void {
     const playerNames = new Set(room.players.map(player => player.name.trim().toLocaleLowerCase()));
     const playerRows = room.players.map(player => {
-      const localAccepted = connectionMode === 'nearby-host' && player.id !== room.hostId && player.connected !== false;
-      const status = player.connected === false ? 'Disconnected' : player.id === room.hostId ? 'Host' : localAccepted ? 'Accepted' : '';
-      const transport = nearbyPlayerDetail(player, room);
-      return `<li><span class="presence ${player.connected === false ? 'is-offline' : ''}" aria-hidden="true"></span><span class="roster-player"><strong>${escapeHtml(player.name)}</strong>${transport ? `<small class="transport-detail ${escapeHtml(transport.phase)}">${escapeHtml(transport.detail)}</small>` : ''}</span>${status ? `<em class="invite-state ${status.toLowerCase()}">${status}</em>` : ''}${inviteButton(player)}</li>`;
+      const status = player.id === room.hostId ? 'Host' : '';
+      const availability = heartbeatAvailability(player);
+      return `<li><span class="presence ${player.connected === false ? 'is-offline' : ''}" aria-hidden="true"></span><span class="roster-player"><strong>${escapeHtml(player.name)}</strong><small class="player-availability ${availability.status}">${escapeHtml(availability.text)}</small></span>${heartbeatGraph(player.id, availability.status === 'unavailable' || availability.status === 'disconnected')}${status ? `<em class="invite-state ${status.toLowerCase()}">${status}</em>` : ''}</li>`;
     });
     const inviteRows = connectionMode === 'nearby-host'
       ? [...nearbyInviteStates.values()]
         .filter(invite => !playerNames.has(invite.name.trim().toLocaleLowerCase()))
         .map(invite => {
-          const transport = nearbyPeerStates.get(nearbyPeerKey(invite.name));
-          const detail = transport?.detail ?? 'Connection request queued';
-          const phase = transport?.phase ?? 'requested';
-          return `<li><span class="presence invite-pending" aria-hidden="true"></span><span class="roster-player"><strong>${escapeHtml(invite.name)}</strong><small class="transport-detail ${escapeHtml(phase)}">${escapeHtml(detail)}</small></span><em class="invite-state ${invite.status}">${invite.status}</em></li>`;
+          const detail = invite.status === 'accepted' ? 'Connected · joining lobby…'
+            : invite.status === 'received' ? 'Connection received · waiting for acceptance'
+            : 'Not connected · request sent';
+          return `<li><span class="presence invite-pending" aria-hidden="true"></span><span class="roster-player"><strong>${escapeHtml(invite.name)}</strong><small class="player-availability checking">${detail}</small></span><em class="invite-state ${invite.status}">${invite.status}</em></li>`;
         })
       : [];
     roster.innerHTML = [...playerRows, ...inviteRows].join('');
@@ -1186,16 +1303,6 @@ export function createTiles(root: HTMLElement): void {
     return disconnected.length === 1 && available.length === 1 ? available[0] : undefined;
   }
 
-  function inviteButton(player: PlayerSummary): string {
-    if (connectionMode !== 'nearby-host' || player.connected !== false || player.id === state?.hostId) return '';
-    const endpoint = endpointForPlayer(player.name);
-    const invite = endpoint ? nearbyInviteStates.get(endpoint.endpointId) : undefined;
-    const pending = endpoint ? outgoingNearbyInvites.has(endpoint.endpointId) : false;
-    const searching = pendingReinviteNames.has(player.name.trim().toLocaleLowerCase());
-    const label = invite?.status === 'received' ? 'Received' : pending ? 'Inviting…' : searching ? 'Finding…' : 'Invite';
-    return `<button type="button" class="reinvite-player" data-reinvite-player="${escapeHtml(player.name)}" ${pending || searching ? 'disabled' : ''}>${label}</button>`;
-  }
-
   function renderPlayerDisconnect(room: RoomSnapshot): void {
     const disconnected = room.players.filter(player => player.connected === false && !player.eliminated);
     playerDisconnect.hidden = room.phase === 'lobby' || disconnected.length === 0;
@@ -1206,21 +1313,8 @@ export function createTiles(root: HTMLElement): void {
       && disconnected.some(player => player.id === room.hostId);
     message.textContent = hostDisconnected
       ? `${disconnected.find(player => player.id === room.hostId)?.name ?? 'Host'} disconnected — game paused while reconnecting.`
-      : `${disconnected.map(player => player.name).join(', ')} disconnected — waiting for them to rejoin.`;
+      : `${disconnected.map(player => player.name).join(', ')} disconnected — they can rejoin from their home screen.`;
     playerDisconnect.append(message);
-    if (connectionMode !== 'nearby-host') return;
-    for (const player of disconnected) {
-      const endpoint = endpointForPlayer(player.name);
-      const searching = pendingReinviteNames.has(player.name.trim().toLocaleLowerCase());
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'reinvite-player';
-      button.dataset.reinvitePlayer = player.name;
-      button.disabled = searching || !!endpoint && outgoingNearbyInvites.has(endpoint.endpointId);
-      button.textContent = searching ? `Finding ${player.name}…`
-        : endpoint && outgoingNearbyInvites.has(endpoint.endpointId) ? 'Inviting…' : `Invite ${player.name}`;
-      playerDisconnect.append(button);
-    }
   }
 
   async function sendNearbyReinvite(endpoint: NearbyEndpoint, playerName: string): Promise<void> {
@@ -1519,7 +1613,8 @@ export function createTiles(root: HTMLElement): void {
     await NearbyConnections.addListener('verificationRequired', verification => {
       setNearbyPeerState(verification.name, 'authenticating', 'Secure Nearby handshake · authenticating devices');
       const returningPlayer = connectionMode === 'nearby-host'
-        && state?.players.some(player => player.connected === false);
+        && state?.players.some(player => player.connected === false
+          && player.name.trim().toLocaleLowerCase() === verification.name.trim().toLocaleLowerCase());
       if (connectionMode === 'nearby-host' && (outgoingNearbyInvites.has(verification.endpointId) || returningPlayer)) {
         const invite = nearbyInviteStates.get(verification.endpointId);
         if (invite) invite.status = 'received';
@@ -1656,6 +1751,7 @@ export function createTiles(root: HTMLElement): void {
       roomName = 'nearby';
       if (!restored) {
         localStorage.removeItem(LOCAL_GAME_KEY);
+        localStorage.removeItem(LOCAL_SESSION_KEY);
         localStorage.removeItem('tiles-session:nearby');
       }
       roomLabels.forEach(label => { label.textContent = 'Local'; });
@@ -1678,7 +1774,7 @@ export function createTiles(root: HTMLElement): void {
         setNearbyPeerState(endpointName, 'requesting', 'Endpoint selected · requesting Nearby connection');
       }
       const resumeToken = restored ? localStorage.getItem(sessionKey()) ?? undefined : undefined;
-      localHost.receive(localPeerId, { t: 'hello', v: PROTOCOL_VERSION, name, resumeToken });
+      localHost.receive(localPeerId, { t: 'hello', v: PROTOCOL_VERSION, name, color: selectedPlayerColor(), resumeToken });
       for (const endpointId of inviteIds) {
         const endpointName = invitedEndpointNames.get(endpointId) ?? 'Nearby player';
         void NearbyConnections.requestConnection({ endpointId, name })
@@ -1708,7 +1804,37 @@ export function createTiles(root: HTMLElement): void {
     await startNearbyHost(name, undefined, inviteIds);
   }
 
-  async function continueLocalGame(name: string): Promise<void> {
+  async function continueLocalGame(name: string, role: 'host' | 'participant'): Promise<void> {
+    if (role === 'participant') {
+      const session = readLocalSession();
+      if (!session) {
+        renderSavedGames();
+        show('That local game is no longer stored on this device.', 'bad');
+        return;
+      }
+      try {
+        await requestNearbyPermissions();
+        clearAllNearbyChannels();
+        connectionMode = 'nearby-join';
+        nearbyName = name;
+        nearbyHostName = session.hostName;
+        nearbyHostId = null;
+        nearbyAutoReconnect = true;
+        nearbyConnectingId = null;
+        nearbyReconnectAttempt = 0;
+        roomName = 'nearby';
+        nameInput.value = name;
+        localStorage.setItem('tiles-name', name);
+        stopOnlineTransport();
+        showNearbyLobbyLoading(session.hostName, `Finding ${session.hostName} nearby…`);
+        await NearbyConnections.stop().catch(() => undefined);
+        await resumeNearbyTransport();
+      } catch {
+        show('Nearby play needs Bluetooth, Wi-Fi and permission to rejoin.', 'bad');
+        renderSavedGames();
+      }
+      return;
+    }
     const restored = readLocalGame();
     if (!restored) {
       renderSavedGames();
@@ -1745,8 +1871,11 @@ export function createTiles(root: HTMLElement): void {
     peel.textContent = String(next.peel);
     dumps.textContent = String(next.dumps ?? 0);
     renderLobbyRoster(next);
-    players.innerHTML = next.players.map((player, index) =>
-      `<li><button type="button" data-view-player="${escapeHtml(player.id)}" class="player-chip ${player.id === myId ? 'is-you' : ''} ${viewingPlayerId === player.id ? 'is-viewing' : ''} ${player.eliminated ? 'is-out' : ''} ${player.connected === false ? 'is-offline' : ''}" style="--owner-color:${ownerColor(index)}"><i></i><span>${escapeHtml(player.name)}</span><b>${player.connected === false ? 'OFFLINE' : player.eliminated ? 'OUT' : `${player.tilesLeft} loose`}</b></button></li>`
+    players.innerHTML = next.players.map((player, index) => {
+      const heartbeat = heartbeatAvailability(player);
+      const unavailable = heartbeat.status === 'unavailable' || heartbeat.status === 'disconnected';
+      return `<li><button type="button" data-view-player="${escapeHtml(player.id)}" class="player-chip ${player.id === myId ? 'is-you' : ''} ${viewingPlayerId === player.id ? 'is-viewing' : ''} ${player.eliminated ? 'is-out' : ''} ${player.connected === false ? 'is-offline' : ''}" style="--owner-color:${colorForPlayer(player, index)}"><i class="${unavailable ? 'is-unavailable' : ''}"></i><span>${escapeHtml(player.name)}</span><b>${player.connected === false ? 'OFFLINE' : player.eliminated ? 'OUT' : `${player.tilesLeft} loose`}</b></button></li>`;
+    }
     ).join('');
     requestAnimationFrame(updatePlayerScrollFades);
     renderPlayerDisconnect(next);
@@ -1771,7 +1900,7 @@ export function createTiles(root: HTMLElement): void {
     void loadDictionary(dictionary);
 
     nameGate.hidden = true;
-    lobbyTitle.textContent = 'Waiting for the bunch';
+    lobbyTitle.textContent = connectionMode === 'nearby-host' || connectionMode === 'nearby-join' ? 'Local room' : 'Online room';
     lobby.hidden = next.phase !== 'lobby';
     game.hidden = next.phase === 'lobby';
     flushChatReadReceipts();
@@ -1785,9 +1914,9 @@ export function createTiles(root: HTMLElement): void {
       peelSent = -1;
       const myIndex = next.players.findIndex(player => player.id === myId);
       const myArea = areaFor(next.players[myIndex], myIndex, next.players.length);
-      const startingScale = [0.92, 0.92, 0.72, 0.6, 0.54, 0.47, 0.42, 0.38, 0.35][next.players.length] ?? 0.35;
-      camera = { x: 0, y: 0, scale: startingScale, rotation: -(myArea?.rotation ?? 0) };
-      applyCamera();
+      camera = { x: 0, y: 0, scale: .5, rotation: -(myArea?.rotation ?? 0) };
+      viewingPlayerId = myId;
+      requestAnimationFrame(() => focusPlayer(myId, false));
     }
     if (next.phase === 'finished' && next.winnerId && previousPhase !== 'finished') {
       const winner = next.players.find(player => player.id === next.winnerId);
@@ -1819,7 +1948,7 @@ export function createTiles(root: HTMLElement): void {
     rack.innerHTML = '';
 
     for (const [playerIndex, player] of (state?.players ?? []).entries()) {
-      const color = ownerColor(playerIndex);
+      const color = colorForPlayer(player, playerIndex);
       const area = areaFor(player, playerIndex, state?.players.length ?? 1);
       if (area) boardLayer.append(makePlayerArea(player, area, color));
       const isMine = player.id === myId;
@@ -1859,7 +1988,7 @@ export function createTiles(root: HTMLElement): void {
       slot.dataset.rackIndex = String(slotIndex);
       if (tileId) slot.dataset.rackId = tileId;
       const tile = tileId ? tiles.find(value => value.id === tileId) : undefined;
-      if (tile && (tile.x == null || tile.y == null)) slot.append(makeTile(tile, me, ownerColor(Math.max(0, myIndex)), canEditTiles(), 0));
+      if (tile && (tile.x == null || tile.y == null)) slot.append(makeTile(tile, me, colorForPlayer(me, Math.max(0, myIndex)), canEditTiles(), 0));
       rack.append(slot);
     }
     dump.disabled = !selectedId || (state?.bunch ?? 0) < 3 || state?.phase !== 'playing';
@@ -2486,8 +2615,16 @@ export function createTiles(root: HTMLElement): void {
     send({ t: 'peel', peel: state.peel, board: payload });
   }
 
-  function applyCamera(): void {
+  function applyCamera(animate = false): void {
+    if (cameraAnimationTimer != null) window.clearTimeout(cameraAnimationTimer);
+    cameraAnimationTimer = null;
+    boardLayer.classList.toggle('is-camera-animating', animate);
+    if (animate) void boardLayer.offsetWidth;
     boardLayer.style.transform = `translate(${camera.x}px, ${camera.y}px) rotate(${camera.rotation}rad) scale(${camera.scale})`;
+    if (animate) cameraAnimationTimer = window.setTimeout(() => {
+      boardLayer.classList.remove('is-camera-animating');
+      cameraAnimationTimer = null;
+    }, 450);
   }
 
   function updatePlayerScrollFades(): void {
@@ -2526,7 +2663,7 @@ export function createTiles(root: HTMLElement): void {
     applyCamera();
   }
 
-  function focusPlayer(playerId: string): void {
+  function focusPlayer(playerId: string, animate = true): void {
     if (!state) return;
     const playerIndex = state.players.findIndex(player => player.id === playerId);
     if (playerIndex < 0) return;
@@ -2577,7 +2714,7 @@ export function createTiles(root: HTMLElement): void {
     players.querySelectorAll<HTMLElement>('[data-view-player]').forEach(chip => {
       chip.classList.toggle('is-viewing', chip.dataset.viewPlayer === playerId);
     });
-    applyCamera();
+    applyCamera(animate);
   }
 
   function gestureFromPointers(): { center: Point; distance: number; angle: number } | null {
@@ -2723,7 +2860,7 @@ export function createTiles(root: HTMLElement): void {
       savedGameList.querySelectorAll<HTMLButtonElement>('button').forEach(button => { button.disabled = true; });
       const title = open.querySelector('strong');
       if (title) title.textContent = 'Loading local game…';
-      void continueLocalGame(sanitizeName(open.dataset.savedName));
+      void continueLocalGame(sanitizeName(open.dataset.savedName), open.dataset.savedRole === 'participant' ? 'participant' : 'host');
       return;
     }
     if (open?.dataset.savedRoom && open.dataset.savedName) {
@@ -2749,6 +2886,7 @@ export function createTiles(root: HTMLElement): void {
     const forgetLocal = target.closest<HTMLButtonElement>('[data-forget-local]');
     if (forgetLocal) {
       localStorage.removeItem(LOCAL_GAME_KEY);
+      localStorage.removeItem(LOCAL_SESSION_KEY);
       localStorage.removeItem('tiles-session:nearby');
       renderSavedGames();
       return;
@@ -3107,7 +3245,10 @@ export function createTiles(root: HTMLElement): void {
     if (forgetLobby && leavingRoom) {
       localStorage.removeItem(`tiles-session:${leavingRoom}`);
       writeSavedGames(readSavedGames().filter(record => record.room !== leavingRoom));
-      if (leavingRoom === 'nearby') localStorage.removeItem(LOCAL_GAME_KEY);
+      if (leavingRoom === 'nearby') {
+        localStorage.removeItem(LOCAL_GAME_KEY);
+        localStorage.removeItem(LOCAL_SESSION_KEY);
+      }
     }
     location.assign(import.meta.env.BASE_URL);
   }
@@ -3144,6 +3285,9 @@ export function createTiles(root: HTMLElement): void {
   window.setInterval(() => {
     if (connectionMode === 'online') send({ t: 'ping' });
   }, 25_000);
+  window.setInterval(() => {
+    if (localHost && state) localHost.heartbeat();
+  }, 4_000);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
       if (isNativeNearby() && (connectionMode === 'nearby-host' || connectionMode === 'nearby-join')) {
@@ -3168,6 +3312,11 @@ export function createTiles(root: HTMLElement): void {
       void resumeNearbyTransport();
     }
   });
+  const savedPlayerColor = sanitizePlayerColor(localStorage.getItem('tiles-color'));
+  colorInputs.forEach(input => { input.checked = input.value === savedPlayerColor; });
+  colorInputs.forEach(input => input.addEventListener('change', () => {
+    if (input.checked) localStorage.setItem('tiles-color', sanitizePlayerColor(input.value));
+  }));
   initializeUpdates();
   void initializeNearby();
   renderSavedGames();
@@ -3209,10 +3358,6 @@ export function createTiles(root: HTMLElement): void {
     });
     window.addEventListener('focus', () => void registration?.update());
   }
-}
-
-function ownerColor(index: number): string {
-  return ['#ff664d', '#2478d4', '#1b8b58', '#9a55cc', '#e58b18', '#d14486', '#008b95', '#735c3b'][index % 8];
 }
 
 function areaFor(player: PlayerSummary | undefined, index: number, count: number): PlayerArea | undefined {

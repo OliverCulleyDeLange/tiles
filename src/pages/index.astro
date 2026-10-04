@@ -20,6 +20,17 @@
         <span>Player name</span>
         <input id="player-name" data-name-input form="online-game-form" maxlength="18" autocomplete="nickname" required />
       </label>
+      <fieldset class="player-colors" data-player-colors>
+        <legend>Your colour</legend>
+        <label style="--player-color:#ff664d"><input type="radio" name="player-color" value="#ff664d" checked /><span>Coral</span></label>
+        <label style="--player-color:#2478d4"><input type="radio" name="player-color" value="#2478d4" /><span>Blue</span></label>
+        <label style="--player-color:#1b8b58"><input type="radio" name="player-color" value="#1b8b58" /><span>Green</span></label>
+        <label style="--player-color:#9a55cc"><input type="radio" name="player-color" value="#9a55cc" /><span>Purple</span></label>
+        <label style="--player-color:#e58b18"><input type="radio" name="player-color" value="#e58b18" /><span>Orange</span></label>
+        <label style="--player-color:#d14486"><input type="radio" name="player-color" value="#d14486" /><span>Pink</span></label>
+        <label style="--player-color:#008b95"><input type="radio" name="player-color" value="#008b95" /><span>Teal</span></label>
+        <label style="--player-color:#735c3b"><input type="radio" name="player-color" value="#735c3b" /><span>Brown</span></label>
+      </fieldset>
       <div class="home-options" data-home-options>
         <form id="online-game-form" class="play-option online-option" data-name-form>
           <div class="option-heading"><span>Online</span><h2>Play online</h2></div>
@@ -47,13 +58,10 @@
 
     <section class="lobby-card" data-view="lobby" hidden>
       <header>
+        <button class="lobby-back" type="button" data-lobby-back>← Back</button>
         <div>
           <p class="eyebrow">Room <span data-room-label></span></p>
-          <h1 data-lobby-title>Waiting for the bunch</h1>
-        </div>
-        <div class="lobby-nav">
-          <button type="button" data-lobby-back>← Back</button>
-          <span class="live-pill">Live</span>
+          <h1 data-lobby-title>Local room</h1>
         </div>
       </header>
       <ol class="roster" data-roster></ol>
@@ -208,6 +216,12 @@
   .player-name-field span { font-weight: 800; }
   .player-name-field input, .online-start, .primary-action, .dump-button, .menu-button { min-height: 3.2rem; border: 2px solid var(--tr-ink); border-radius: 10px; font: 800 1rem/1 inherit; }
   .player-name-field input { width: 100%; min-width: 0; padding: .7rem .9rem; background: #fff; color: var(--tr-ink); caret-color: var(--tr-ink); }
+  .player-colors { display: flex; flex-wrap: wrap; gap: .45rem; margin: .8rem 0 0; padding: 0; border: 0; }
+  .player-colors legend { width: 100%; margin-bottom: .1rem; font-size: .78rem; font-weight: 800; }
+  .player-colors label { position: relative; display: grid; width: 2rem; aspect-ratio: 1; place-items: center; border: 2px solid var(--tr-ink); border-radius: 50%; background: var(--player-color); box-shadow: 1px 1px 0 var(--tr-ink); cursor: pointer; }
+  .player-colors input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  .player-colors label:has(input:checked) { outline: 3px solid #fff; outline-offset: -5px; box-shadow: 0 0 0 2px var(--tr-ink); }
+  .player-colors span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .online-start, .primary-action { width: 100%; padding: .7rem 1.1rem; background: var(--tr-yellow); color: var(--tr-ink); box-shadow: 3px 3px 0 var(--tr-ink); cursor: pointer; }
   .home-options { max-height: 0; opacity: 0; visibility: hidden; overflow: hidden; transform: translateY(12px); pointer-events: none; transition: max-height .45s ease, opacity .25s ease, transform .3s ease, visibility 0s linear .45s; }
   .home-options.is-ready { max-height: 1600px; opacity: 1; visibility: visible; overflow: visible; transform: none; pointer-events: auto; transition-delay: 0s; }
@@ -244,18 +258,22 @@
   .nearby-search.is-inline { grid-template-columns: auto 1fr; width: auto; justify-items: start; align-items: center; padding: .2rem .1rem; }
   .nearby-search.is-inline span { width: 1.65rem; font-size: .9rem; box-shadow: 2px 2px 0 var(--tr-ink); }
   @keyframes nearby-tile-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-  .lobby-card header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+  .lobby-card header { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: .8rem; }
   .lobby-card header > div { min-width: 0; }
   .lobby-card h1 { font-size: clamp(2.3rem, 7vw, 4rem); }
-  .lobby-nav { flex: 0 0 auto; display: flex; align-items: center; gap: .45rem; }
-  .lobby-nav button { min-height: 2.2rem; padding: .35rem .6rem; border: 2px solid var(--tr-ink); border-radius: 999px; background: #fff; color: var(--tr-ink); font: 800 .78rem/1 inherit; cursor: pointer; }
-  .live-pill { flex: 0 0 auto; border: 2px solid var(--tr-ink); background: #c8ffcf; border-radius: 999px; padding: .35rem .7rem; font-weight: 800; }
+  .lobby-back { min-height: 2.2rem; margin-top: .05rem; padding: .35rem .6rem; border: 2px solid var(--tr-ink); border-radius: 999px; background: #fff; color: var(--tr-ink); font: 800 .78rem/1 inherit; cursor: pointer; }
   .roster { list-style: none; padding: 0; margin: 2rem 0; display: grid; gap: .55rem; }
   .roster li { display: flex; align-items: center; gap: .7rem; padding: .8rem; background: #fff; border: 2px solid var(--tr-ink); border-radius: 10px; }
   .roster li.is-loading { color: #6b6044; }
   .roster li.is-loading::before { content: ''; width: 1rem; height: 1rem; flex: 0 0 auto; border: 2px solid #b4aa88; border-top-color: var(--tr-ink); border-radius: 50%; animation: button-spin .7s linear infinite; }
   .roster-player { min-width: 0; flex: 1 1 9rem; display: grid; gap: .16rem; }
   .roster-player strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .player-availability { color: #19734b; font-size: .68rem; font-weight: 800; }
+  .player-availability.checking { color: #765b00; }
+  .player-availability.unavailable, .player-availability.disconnected { color: #a43124; }
+  .heartbeat-monitor { width: 82px; height: 28px; flex: 0 0 auto; border: 1.5px solid #28442f; border-radius: 5px; background: #102017; }
+  .heartbeat-monitor path { fill: none; stroke: #57ef85; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .heartbeat-monitor.is-unavailable path { stroke: #ff7b68; }
   .transport-detail { color: #6b6044; font-size: .68rem; font-weight: 700; line-height: 1.25; }
   .transport-detail.searching,
   .transport-detail.requesting,
@@ -286,8 +304,8 @@
   .chat-message span { overflow-wrap: anywhere; }
   .chat-message time { color: #92876a; font-size: .62rem; }
   .chat-message.is-you strong { color: #8a5400; }
-  .chat-receipt { grid-column: 2 / -1; color: #7d7359; font-size: .62rem; font-weight: 800; text-align: right; }
-  .chat-receipt[data-status="read"] { color: #19734b; }
+  .chat-receipt { margin-left: .3rem; color: #7d7359; font-size: .72rem; font-weight: 900; letter-spacing: -.16em; }
+  .chat-receipt[data-status="read"] { color: #2478d4; }
   .chat-receipt[data-status="not-delivered"] { color: #b23a2c; }
   .chat-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .45rem; padding: .55rem; border-top: 1.5px solid var(--tr-ink); }
   .chat-form input { min-width: 0; min-height: 2.5rem; padding: .55rem .65rem; border: 1.5px solid var(--tr-ink); border-radius: 8px; color: var(--tr-ink); font: 500 .85rem/1 inherit; }
@@ -345,6 +363,9 @@
   .player-chip.is-out { opacity: .45; }
   .player-chip.is-offline { background: #ffb0a3; opacity: 1; }
   .player-chip i { width: .65rem; height: .65rem; flex: 0 0 auto; border: 1px solid var(--tr-ink); border-radius: 50%; background: var(--owner-color); }
+  .player-chip i.heartbeat-pulse { animation: heartbeat-dot .5s ease-out; }
+  .player-chip i.is-unavailable { filter: grayscale(1); opacity: .45; }
+  @keyframes heartbeat-dot { 0% { transform: scale(1); box-shadow: 0 0 0 0 var(--owner-color); } 35% { transform: scale(1.45); box-shadow: 0 0 0 5px transparent; } 100% { transform: scale(1); } }
   .player-chip b { font-size: .62rem; text-transform: uppercase; }
   .player-disconnect-notice { grid-row: 2; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: .45rem; padding: .4rem max(.7rem, env(safe-area-inset-right)) .4rem max(.7rem, env(safe-area-inset-left)); border-bottom: 2px solid var(--tr-ink); background: #ffb0a3; color: var(--tr-ink); font-size: .78rem; font-weight: 900; text-align: center; }
   .player-disconnect-notice[hidden] { display: none; }
@@ -353,6 +374,7 @@
   .board.is-selecting { cursor: crosshair; }
   .selection-marquee { position: absolute; z-index: 7; border: 2px solid #c44a35; border-radius: 5px; background: rgba(255, 102, 77, .18); box-shadow: 0 0 0 1px rgba(255,255,255,.7) inset; pointer-events: none; }
   .board-layer { position: absolute; left: 50%; top: 50%; width: 4800px; height: 4800px; margin: -2400px 0 0 -2400px; transform-origin: 50% 50%; background-color: #eee4c5; background-image: radial-gradient(ellipse at center, rgba(255,251,229,.92) 0%, rgba(238,228,197,.48) 48%, rgba(196,177,132,.28) 100%), radial-gradient(circle at 22% 31%, rgba(113,91,49,.13) 0 1.2px, transparent 1.8px), radial-gradient(circle at 71% 63%, rgba(255,255,255,.52) 0 1.4px, transparent 2px), radial-gradient(circle at 43% 78%, rgba(130,101,54,.09) 0 1px, transparent 1.7px); background-size: 100% 100%, 37px 41px, 53px 47px, 61px 59px; will-change: transform; }
+  .board-layer.is-camera-animating { transition: transform .42s cubic-bezier(.22,.8,.28,1); }
   .peel-animation { position: fixed; z-index: 100; inset: 0; display: grid; place-content: center; pointer-events: none; opacity: 0; transform: scale(.35) rotate(-18deg); }
   .peel-animation span { font-size: clamp(5rem, 22vw, 12rem); filter: drop-shadow(0 .35rem 0 rgba(0,0,0,.18)); }
   .peel-animation strong { text-align: center; font: 1000 clamp(2rem, 9vw, 5rem)/1 var(--font-display, sans-serif); color: #f4c400; -webkit-text-stroke: 2px var(--tr-ink); }

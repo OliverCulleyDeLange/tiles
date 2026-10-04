@@ -10,6 +10,7 @@ import {
   sanitizeChatText,
   sanitizeLayout,
   sanitizeName,
+  sanitizePlayerColor,
   sanitizeRoom,
   type ClientMessage,
   type DictionaryId,
@@ -60,6 +61,7 @@ interface Session {
 interface PlayerState {
   id: string;
   name: string;
+  color?: string;
   resumeToken?: string;
   connected?: boolean;
   hand: Tile[];
@@ -171,6 +173,7 @@ export class TilesRoom extends DurableObject<Env> {
       session.name = returning.name;
       session.joined = true;
       returning.connected = true;
+      returning.color = sanitizePlayerColor(message.color);
       // Close an older connection before attaching this player identity to the
       // new socket. Durable Object WebSocket wrappers are not guaranteed to be
       // reference-identical across getWebSockets() calls, so comparing them
@@ -194,7 +197,7 @@ export class TilesRoom extends DurableObject<Env> {
     session.joined = true;
     ws.serializeAttachment(session);
     const newResumeToken = crypto.randomUUID().replaceAll('-', '') + crypto.randomUUID().replaceAll('-', '');
-    game.players.push({ id: session.id, name: session.name, resumeToken: newResumeToken, connected: true, hand: [], board: [], eliminated: false, voted: false });
+    game.players.push({ id: session.id, name: session.name, color: sanitizePlayerColor(message.color), resumeToken: newResumeToken, connected: true, hand: [], board: [], eliminated: false, voted: false });
     if (!game.hostId) game.hostId = session.id;
     await this.save(game);
     this.send(ws, { t: 'welcome', id: session.id, resumeToken: newResumeToken, room: this.snapshot(game) });
@@ -426,6 +429,7 @@ export class TilesRoom extends DurableObject<Env> {
     const players: PlayerSummary[] = game.players.map(player => ({
       id: player.id,
       name: player.name,
+      color: sanitizePlayerColor(player.color),
       connected: player.connected !== false,
       tilesLeft: looseTileCount(player.hand, player.board ?? []),
       tiles: player.hand,

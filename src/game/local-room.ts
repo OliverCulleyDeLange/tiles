@@ -7,6 +7,7 @@ import {
   sanitizeChatText,
   sanitizeLayout,
   sanitizeName,
+  sanitizePlayerColor,
   type ClientMessage,
   type DictionaryId,
   type PlacedTile,
@@ -19,6 +20,7 @@ import {
 interface LocalPlayer {
   id: string;
   name: string;
+  color?: string;
   resumeToken: string;
   connected: boolean;
   hand: Tile[];
@@ -65,6 +67,8 @@ export class LocalRoomHost {
   private reviewBoard?: PlacedTile[];
   private reviewEndsAt?: number;
   private rottenCalled = false;
+  private heartbeatPending = new Map<string, { id: string; sentAt: number }>();
+  private heartbeatStatus = new Map<string, 'checking' | 'available' | 'unavailable'>();
 
   constructor(
     private readonly deliver: (peerId: string, message: ServerMessage) => void,
@@ -89,7 +93,7 @@ export class LocalRoomHost {
 
   receive(peerId: string, message: ClientMessage): void {
     if (message.t === 'hello') {
-      this.join(peerId, message.name, message.resumeToken);
+      this.join(peerId, message.name, message.color, message.resumeToken);
       this.changed();
       return;
     }
@@ -104,14 +108,53 @@ export class LocalRoomHost {
     else if (message.t === 'peel') this.doPeel(player, message.peel, message.board);
     else if (message.t === 'dump') this.dump(player, message.tileId);
     else if (message.t === 'review') this.review(player, message.rotten);
+    else if (message.t === 'heartbeat-ack') this.heartbeatAck(player, message.id, message.sentAt);
     else if (message.t === 'ping') this.deliver(peerId, { t: 'pong' });
-    if (message.t !== 'ping' && message.t !== 'chat') this.changed();
+    if (message.t !== 'ping' && message.t !== 'chat' && message.t !== 'heartbeat-ack') this.changed();
+  }
+
+  heartbeat(): void {
+    const now = Date.now();
+    const host = this.players.find(player => player.id === this.hostId && player.connected);
+    if (host) this.broadcast({ t: 'heartbeat-status', playerId: host.id, status: 'available', latencyMs: 0, at: now });
+    for (const player of this.players) {
+      if (!player.connected || player.id === this.hostId) continue;
+      const pending = this.heartbeatPending.get(player.id);
+      if (pending && now - pending.sentAt < 7_000) continue;
+      if (pending) {
+        this.heartbeatPending.delete(player.id);
+        this.heartbeatStatus.set(player.id, 'unavailable');
+        this.broadcast({ t: 'heartbeat-status', playerId: player.id, status: 'unavailable', at: now });
+      }
+      const id = crypto.randomUUID();
+      this.heartbeatPending.set(player.id, { id, sentAt: now });
+      if (!this.heartbeatStatus.has(player.id)) {
+        this.heartbeatStatus.set(player.id, 'checking');
+        this.broadcast({ t: 'heartbeat-status', playerId: player.id, status: 'checking', at: now });
+      }
+      this.deliver(player.id, { t: 'heartbeat', id, sentAt: now });
+    }
+  }
+
+  private heartbeatAck(player: LocalPlayer, id: string, sentAt: number): void {
+    const pending = this.heartbeatPending.get(player.id);
+    if (!pending || pending.id !== id || pending.sentAt !== sentAt) return;
+    this.heartbeatPending.delete(player.id);
+    this.heartbeatStatus.set(player.id, 'available');
+    const now = Date.now();
+    this.broadcast({
+      t: 'heartbeat-status', playerId: player.id, status: 'available',
+      latencyMs: Math.max(0, Math.min(9_999, now - sentAt)), at: now,
+    });
   }
 
   disconnect(peerId: string): void {
     const index = this.players.findIndex(value => value.id === peerId);
     if (index < 0) return;
     this.players[index].connected = false;
+    this.heartbeatPending.delete(peerId);
+    this.heartbeatStatus.set(peerId, 'unavailable');
+    this.broadcast({ t: 'heartbeat-status', playerId: peerId, status: 'unavailable', at: Date.now() });
     this.broadcastRoom();
     this.changed();
   }
@@ -140,10 +183,13 @@ export class LocalRoomHost {
     this.onChange?.(this.exportState());
   }
 
-  private join(peerId: string, rawName: string, resumeToken?: string): void {
+  private join(peerId: string, rawName: string, rawColor?: string, resumeToken?: string): void {
+    const color = sanitizePlayerColor(rawColor);
     const existingPeer = this.players.find(player => player.id === peerId);
     if (existingPeer) {
       existingPeer.connected = true;
+      existingPeer.color = color;
+      this.heartbeatStatus.set(peerId, 'checking');
       this.deliver(peerId, { t: 'welcome', id: peerId, resumeToken: existingPeer.resumeToken, room: this.snapshot() });
       this.deliver(peerId, { t: 'hand', tiles: existingPeer.hand, replace: true });
       return;
@@ -158,6 +204,10 @@ export class LocalRoomHost {
       const previousId = resuming.id;
       resuming.id = peerId;
       resuming.connected = true;
+      resuming.color = color;
+      this.heartbeatPending.delete(previousId);
+      this.heartbeatStatus.delete(previousId);
+      this.heartbeatStatus.set(peerId, 'checking');
       if (this.hostId === previousId) this.hostId = peerId;
       if (this.claimantId === previousId) this.claimantId = peerId;
       if (this.winnerId === previousId) this.winnerId = peerId;
@@ -174,7 +224,8 @@ export class LocalRoomHost {
     let suffix = 2;
     while (existing.has(unique.toLowerCase())) unique = `${name.slice(0, 15)} ${suffix++}`;
     const token = crypto.randomUUID();
-    this.players.push({ id: peerId, name: unique, resumeToken: token, connected: true, hand: [], board: [], eliminated: false, voted: false });
+    this.players.push({ id: peerId, name: unique, color, resumeToken: token, connected: true, hand: [], board: [], eliminated: false, voted: false });
+    this.heartbeatStatus.set(peerId, 'checking');
     if (!this.hostId) this.hostId = peerId;
     this.deliver(peerId, { t: 'welcome', id: peerId, resumeToken: token, room: this.snapshot() });
     this.broadcastRoom(peerId);
@@ -348,7 +399,7 @@ export class LocalRoomHost {
   private snapshot(): RoomSnapshot {
     const areas = createPlayerAreas(this.players.length);
     const players: PlayerSummary[] = this.players.map((player, index) => ({
-      id: player.id, name: player.name, tilesLeft: looseTileCount(player.hand, player.board),
+      id: player.id, name: player.name, color: sanitizePlayerColor(player.color), tilesLeft: looseTileCount(player.hand, player.board),
       tiles: player.hand, board: player.board, area: areas[index], connected: player.connected ? undefined : false,
       eliminated: player.eliminated || undefined,
     }));
