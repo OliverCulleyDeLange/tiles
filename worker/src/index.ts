@@ -16,6 +16,7 @@ import {
   type DictionaryId,
   type PlacedTile,
   type PlayerSummary,
+  type PlayerStats,
   type PlayerArea,
   type RoomSnapshot,
   type ServerMessage,
@@ -69,6 +70,7 @@ interface PlayerState {
   area?: PlayerArea;
   eliminated: boolean;
   voted: boolean;
+  stats?: PlayerStats;
 }
 
 interface GameState {
@@ -84,6 +86,8 @@ interface GameState {
   reviewBoard?: PlacedTile[];
   reviewEndsAt?: number;
   rottenCalled?: boolean;
+  lastPeelerId?: string;
+  currentPeelStreak?: number;
 }
 
 const DISTRIBUTION: Record<string, number> = {
@@ -198,7 +202,7 @@ export class TilesRoom extends DurableObject<Env> {
     session.joined = true;
     ws.serializeAttachment(session);
     const newResumeToken = crypto.randomUUID().replaceAll('-', '') + crypto.randomUUID().replaceAll('-', '');
-    game.players.push({ id: session.id, name: session.name, color: sanitizePlayerColor(message.color), resumeToken: newResumeToken, connected: true, hand: [], board: [], eliminated: false, voted: false });
+    game.players.push({ id: session.id, name: session.name, color: sanitizePlayerColor(message.color), resumeToken: newResumeToken, connected: true, hand: [], board: [], eliminated: false, voted: false, stats: { dumps: 0, peels: 0, bestPeelStreak: 0 } });
     if (!game.hostId) game.hostId = session.id;
     await this.save(game);
     this.send(ws, { t: 'welcome', id: session.id, resumeToken: newResumeToken, room: this.snapshot(game) });
@@ -261,6 +265,8 @@ export class TilesRoom extends DurableObject<Env> {
     game.reviewBoard = undefined;
     game.reviewEndsAt = undefined;
     game.rottenCalled = false;
+    game.lastPeelerId = undefined;
+    game.currentPeelStreak = 0;
     if (restarting) this.broadcast({ t: 'new-game' });
     const starting = game.players.length <= 4 ? 21 : game.players.length <= 6 ? 15 : 11;
     const areas = createPlayerAreas(game.players.length);
@@ -270,6 +276,7 @@ export class TilesRoom extends DurableObject<Env> {
       player.area = areas[index];
       player.eliminated = false;
       player.voted = false;
+      player.stats = { dumps: 0, peels: 0, bestPeelStreak: 0 };
       this.sendTo(player.id, { t: 'hand', tiles: player.hand, replace: true });
     }
     await this.save(game);
@@ -321,6 +328,7 @@ export class TilesRoom extends DurableObject<Env> {
       return this.sendTo(session.id, { t: 'peel-result', peel: message.peel, accepted: false, reason: 'Your grid overlaps another player.' });
     }
     player.board = board;
+    this.recordPeel(game, player);
     const active = game.players.filter(value => !value.eliminated);
     if (game.bag.length < active.length) {
       game.phase = 'finished';
@@ -362,6 +370,8 @@ export class TilesRoom extends DurableObject<Env> {
     game.bag.push(returned);
     shuffle(game.bag);
     game.dumps = (game.dumps ?? 0) + 1;
+    player.stats ??= { dumps: 0, peels: 0, bestPeelStreak: 0 };
+    player.stats.dumps++;
     await this.save(game);
     this.sendTo(player.id, { t: 'hand', tiles: player.hand, replace: true });
     this.sendTo(player.id, { t: 'toast', text: `Dumped ${returned.letter}. Three new tiles.`, tone: 'plain' });
@@ -379,6 +389,14 @@ export class TilesRoom extends DurableObject<Env> {
     if (rotten || game.players.filter(value => !value.eliminated).every(value => value.voted)) {
       await this.finishReview(game);
     } else this.broadcastRoom(game);
+  }
+
+  private recordPeel(game: GameState, player: PlayerState): void {
+    player.stats ??= { dumps: 0, peels: 0, bestPeelStreak: 0 };
+    game.currentPeelStreak = game.lastPeelerId === player.id ? (game.currentPeelStreak ?? 0) + 1 : 1;
+    game.lastPeelerId = player.id;
+    player.stats.peels++;
+    player.stats.bestPeelStreak = Math.max(player.stats.bestPeelStreak, game.currentPeelStreak);
   }
 
   private async finishReview(game: GameState): Promise<void> {
@@ -447,6 +465,7 @@ export class TilesRoom extends DurableObject<Env> {
       board: player.board ?? [],
       area: player.area,
       eliminated: player.eliminated || undefined,
+      stats: player.stats ?? { dumps: 0, peels: 0, bestPeelStreak: 0 },
     }));
     return {
       phase: game.phase,

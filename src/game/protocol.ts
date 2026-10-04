@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 export const MAX_PLAYERS = 8;
 export const MAX_NAME_LENGTH = 18;
 export const MAX_MESSAGE_BYTES = 16_384;
@@ -40,6 +40,13 @@ export interface PlayerSummary {
   board: PlacedTile[];
   area?: PlayerArea;
   eliminated?: boolean;
+  stats?: PlayerStats;
+}
+
+export interface PlayerStats {
+  dumps: number;
+  peels: number;
+  bestPeelStreak: number;
 }
 
 export function createPlayerAreas(count: number): PlayerArea[] {

@@ -11,6 +11,7 @@ import {
   type ClientMessage,
   type DictionaryId,
   type PlacedTile,
+  type PlayerStats,
   type PlayerSummary,
   type RoomSnapshot,
   type ServerMessage,
@@ -29,6 +30,7 @@ interface LocalPlayer {
   board: PlacedTile[];
   eliminated: boolean;
   voted: boolean;
+  stats: PlayerStats;
 }
 
 export interface StoredLocalRoom {
@@ -46,6 +48,8 @@ export interface StoredLocalRoom {
   reviewBoard?: PlacedTile[];
   reviewEndsAt?: number;
   rottenCalled: boolean;
+  lastPeelerId?: string;
+  currentPeelStreak?: number;
   updatedAt: number;
 }
 
@@ -69,6 +73,8 @@ export class LocalRoomHost {
   private reviewBoard?: PlacedTile[];
   private reviewEndsAt?: number;
   private rottenCalled = false;
+  private lastPeelerId?: string;
+  private currentPeelStreak = 0;
   private heartbeatPending = new Map<string, { id: string; sentAt: number }>();
   private heartbeatStatus = new Map<string, {
     status: 'checking' | 'available' | 'unavailable';
@@ -87,6 +93,7 @@ export class LocalRoomHost {
     this.hostId = restored.hostId;
     this.players = restored.players.map(player => ({
       ...player, connected: false, connectionStatus: 'disconnected', hand: [...player.hand], board: [...player.board],
+      stats: player.stats ?? { dumps: 0, peels: 0, bestPeelStreak: 0 },
     }));
     this.bag = [...restored.bag];
     this.peel = restored.peel;
@@ -97,6 +104,8 @@ export class LocalRoomHost {
     this.reviewBoard = restored.reviewBoard ? [...restored.reviewBoard] : undefined;
     this.reviewEndsAt = restored.reviewEndsAt;
     this.rottenCalled = restored.rottenCalled;
+    this.lastPeelerId = restored.lastPeelerId;
+    this.currentPeelStreak = restored.currentPeelStreak ?? 0;
   }
 
   receive(peerId: string, message: ClientMessage): void {
@@ -200,6 +209,7 @@ export class LocalRoomHost {
       board: [],
       eliminated: false,
       voted: false,
+      stats: { dumps: 0, peels: 0, bestPeelStreak: 0 },
     });
     this.heartbeatStatus.set(peerId, { status: 'unavailable', at: Date.now() });
     this.broadcastRoom();
@@ -230,6 +240,8 @@ export class LocalRoomHost {
       reviewBoard: this.reviewBoard ? [...this.reviewBoard] : undefined,
       reviewEndsAt: this.reviewEndsAt,
       rottenCalled: this.rottenCalled,
+      lastPeelerId: this.lastPeelerId,
+      currentPeelStreak: this.currentPeelStreak,
       updatedAt: Date.now(),
     };
   }
@@ -276,6 +288,7 @@ export class LocalRoomHost {
       if (this.hostId === previousId) this.hostId = peerId;
       if (this.claimantId === previousId) this.claimantId = peerId;
       if (this.winnerId === previousId) this.winnerId = peerId;
+      if (this.lastPeelerId === previousId) this.lastPeelerId = peerId;
       this.deliver(peerId, { t: 'welcome', id: peerId, resumeToken: resuming.resumeToken, room: this.snapshot() });
       this.deliver(peerId, { t: 'hand', tiles: resuming.hand, replace: true });
       this.broadcastRoom(peerId);
@@ -289,7 +302,7 @@ export class LocalRoomHost {
     let suffix = 2;
     while (existing.has(unique.toLowerCase())) unique = `${name.slice(0, 15)} ${suffix++}`;
     const token = crypto.randomUUID();
-    this.players.push({ id: peerId, name: unique, color, resumeToken: token, deviceId, connected: true, hand: [], board: [], eliminated: false, voted: false });
+    this.players.push({ id: peerId, name: unique, color, resumeToken: token, deviceId, connected: true, hand: [], board: [], eliminated: false, voted: false, stats: { dumps: 0, peels: 0, bestPeelStreak: 0 } });
     this.heartbeatStatus.set(peerId, { status: 'checking', at: Date.now() });
     if (!this.hostId) this.hostId = peerId;
     this.deliver(peerId, { t: 'welcome', id: peerId, resumeToken: token, room: this.snapshot() });
@@ -352,12 +365,15 @@ export class LocalRoomHost {
     this.reviewBoard = undefined;
     this.reviewEndsAt = undefined;
     this.rottenCalled = false;
+    this.lastPeelerId = undefined;
+    this.currentPeelStreak = 0;
     const starting = this.players.length <= 4 ? 21 : this.players.length <= 6 ? 15 : 11;
     for (const player of this.players) {
       player.hand = this.bag.splice(-starting);
       player.board = [];
       player.eliminated = false;
       player.voted = false;
+      player.stats = { dumps: 0, peels: 0, bestPeelStreak: 0 };
     }
     this.broadcastSync(
       player => ({ tiles: player.hand, replace: true }),
@@ -388,6 +404,7 @@ export class LocalRoomHost {
       return;
     }
     player.board = board;
+    this.recordPeel(player);
     const active = this.players.filter(value => !value.eliminated);
     if (this.bag.length < active.length) {
       this.phase = 'finished';
@@ -426,6 +443,7 @@ export class LocalRoomHost {
     this.bag.push(returned);
     shuffle(this.bag);
     this.dumps++;
+    player.stats.dumps++;
     this.deliver(player.id, { t: 'hand', tiles: player.hand, replace: true });
     this.deliver(player.id, { t: 'toast', text: `Dumped ${returned.letter}. Three new tiles.`, tone: 'plain' });
     this.broadcastRoom();
@@ -461,6 +479,13 @@ export class LocalRoomHost {
     return board.some(tile => occupied.has(`${tile.x},${tile.y}`));
   }
 
+  private recordPeel(player: LocalPlayer): void {
+    this.currentPeelStreak = this.lastPeelerId === player.id ? this.currentPeelStreak + 1 : 1;
+    this.lastPeelerId = player.id;
+    player.stats.peels++;
+    player.stats.bestPeelStreak = Math.max(player.stats.bestPeelStreak, this.currentPeelStreak);
+  }
+
   private snapshot(): RoomSnapshot {
     const areas = createPlayerAreas(this.players.length);
     const players: PlayerSummary[] = this.players.map((player, index) => ({
@@ -468,6 +493,7 @@ export class LocalRoomHost {
       tiles: player.hand, board: player.board, area: areas[index], connected: player.connected ? undefined : false,
       connectionStatus: player.connectionStatus,
       eliminated: player.eliminated || undefined,
+      stats: player.stats,
     }));
     return {
       phase: this.phase, resumeAvailable: !!this.resumePhase, hostId: this.hostId, players, bunch: this.bag.length, peel: this.peel, dumps: this.dumps,

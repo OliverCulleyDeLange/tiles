@@ -161,6 +161,10 @@
       <p class="eyebrow">Game options</p>
       <h2>Menu</h2>
       <div class="game-menu-actions">
+        <button type="button" class="game-results-action" data-game-results hidden>
+          <strong>Game results</strong>
+          <span>See the leaderboard and look up words.</span>
+        </button>
         <button type="button" class="new-game-action" data-new-game>
           <strong>New game</strong>
           <span>Reshuffle and redeal fresh tiles for everyone.</span>
@@ -184,6 +188,38 @@
         <button type="button" data-leave-game-confirm>Go to home</button>
         <button type="button" class="primary-action" data-leave-game-cancel autofocus>Stay in game</button>
       </div>
+    </dialog>
+
+    <dialog class="results-dialog" data-results-dialog>
+      <button type="button" class="dialog-close" data-results-close aria-label="Close results">×</button>
+      <div class="results-hero" aria-hidden="true">
+        <span class="winner-banana">🍌</span>
+        <div class="banana-confetti">
+          <i>🍌</i><i>🍌</i><i>🍌</i><i>🍌</i><i>🍌</i><i>🍌</i>
+        </div>
+      </div>
+      <p class="eyebrow">Game complete</p>
+      <h2 data-results-title>Top Banana!</h2>
+      <p class="results-subtitle" data-results-subtitle></p>
+      <section class="results-section" aria-labelledby="highlights-title">
+        <h3 id="highlights-title">Game highlights</h3>
+        <div class="results-awards" data-results-awards></div>
+      </section>
+      <section class="results-section" aria-labelledby="leaderboard-title">
+        <h3 id="leaderboard-title">Leaderboard</h3>
+        <div class="results-leaderboard" data-results-leaderboard></div>
+      </section>
+      <section class="results-section" aria-labelledby="words-title">
+        <h3 id="words-title">Words played</h3>
+        <p class="results-help">Tap a word to look up its meaning.</p>
+        <div class="results-words" data-results-words></div>
+        <a class="word-lookup" data-word-lookup target="_blank" rel="noopener" hidden>Look up on Wiktionary ↗</a>
+      </section>
+      <div class="results-actions">
+        <button type="button" data-results-board>Back to board</button>
+        <button type="button" class="primary-action" data-results-restart>Play again</button>
+      </div>
+      <p class="results-host-note" data-results-host-note hidden>Only the host can start the next game.</p>
     </dialog>
 
     <div class="peel-animation" data-peel-animation aria-hidden="true"><span>🍌</span><strong>PEEL!</strong></div>
@@ -434,23 +470,70 @@
   .rack-slot { flex: 0 0 48px; width: 48px; height: 48px; }
   .rack-slot:empty { border: 1px dashed rgba(255,255,255,.16); border-radius: 6px; }
   .rack-slot > .letter-tile { display: grid; }
-  .game-menu-dialog, .invite-dialog, .leave-game-dialog { width: min(520px, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; border: 3px solid var(--tr-ink); border-radius: 18px; background: var(--tr-cream); color: var(--tr-ink); padding: 1.4rem; box-shadow: 9px 9px 0 var(--tr-ink); }
-  .game-menu-dialog::backdrop, .invite-dialog::backdrop, .leave-game-dialog::backdrop { background: rgba(23,21,15,.65); backdrop-filter: blur(4px); }
-  .game-menu-dialog h2, .invite-dialog h2, .leave-game-dialog h2 { margin: 0 0 .5rem; font: 900 2rem/1 Georgia, serif; }
+  .game-menu-dialog, .invite-dialog, .leave-game-dialog, .results-dialog { width: min(520px, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; border: 3px solid var(--tr-ink); border-radius: 18px; background: var(--tr-cream); color: var(--tr-ink); padding: 1.4rem; box-shadow: 9px 9px 0 var(--tr-ink); }
+  .game-menu-dialog::backdrop, .invite-dialog::backdrop, .leave-game-dialog::backdrop, .results-dialog::backdrop { background: rgba(23,21,15,.72); backdrop-filter: blur(5px); }
+  .game-menu-dialog h2, .invite-dialog h2, .leave-game-dialog h2, .results-dialog h2 { margin: 0 0 .5rem; font: 900 2rem/1 Georgia, serif; }
   .invite-dialog > p:not(.eyebrow), .leave-game-dialog > p:not(.eyebrow) { color: #6b6044; }
   .invite-dialog-actions, .leave-game-dialog-actions { display: grid; grid-template-columns: 1fr 1fr; gap: .65rem; margin-top: 1.2rem; }
   .invite-dialog-actions button, .leave-game-dialog-actions button { min-height: 3rem; border: 2px solid var(--tr-ink); border-radius: 9px; background: #fff; color: var(--tr-ink); box-shadow: 2px 2px 0 var(--tr-ink); font-weight: 800; }
   .invite-dialog-actions [data-invite-accept] { background: var(--tr-yellow); box-shadow: 3px 3px 0 var(--tr-ink); }
   .leave-game-dialog-actions [data-leave-game-cancel] { background: var(--tr-yellow); box-shadow: 3px 3px 0 var(--tr-ink); }
+  .results-dialog { width: min(760px, calc(100vw - 2rem)); padding: 0 1.4rem 1.4rem; }
+  .results-dialog.is-celebrating { animation: results-arrive .9s cubic-bezier(.2,.85,.2,1); }
+  .results-hero { position: relative; display: grid; place-items: center; height: 150px; margin: 0 -1.4rem 1.1rem; overflow: hidden; border-bottom: 3px solid var(--tr-ink); background: radial-gradient(circle at 50% 65%, #fff9df 0 23%, #ffd51f 24% 55%, #ffb91f 56% 100%); }
+  .winner-banana { position: relative; z-index: 2; font-size: 6.5rem; line-height: 1; filter: drop-shadow(0 .35rem 0 rgba(0,0,0,.18)); transform: rotate(-10deg); }
+  .is-celebrating .winner-banana { animation: winner-banana 6s cubic-bezier(.2,.8,.2,1); }
+  .banana-confetti { position: absolute; inset: 0; }
+  .banana-confetti i { --x: 0%; --delay: 0s; position: absolute; left: calc(50% + var(--x)); top: -3rem; font-style: normal; font-size: 2rem; opacity: 0; }
+  .banana-confetti i:nth-child(1) { --x: -42%; --delay: .1s; }
+  .banana-confetti i:nth-child(2) { --x: -27%; --delay: .8s; }
+  .banana-confetti i:nth-child(3) { --x: -10%; --delay: .35s; }
+  .banana-confetti i:nth-child(4) { --x: 10%; --delay: 1.1s; }
+  .banana-confetti i:nth-child(5) { --x: 28%; --delay: .55s; }
+  .banana-confetti i:nth-child(6) { --x: 43%; --delay: 1.35s; }
+  .is-celebrating .banana-confetti i { animation: banana-fall 3.2s var(--delay) ease-in 2; }
+  @keyframes results-arrive { 0% { opacity: 0; transform: translateY(1.5rem) scale(.88); } 70% { opacity: 1; transform: translateY(0) scale(1.02); } 100% { transform: scale(1); } }
+  @keyframes winner-banana { 0% { opacity: 0; transform: rotate(-35deg) scale(.25); } 12% { opacity: 1; transform: rotate(12deg) scale(1.25); } 22%,72% { transform: rotate(-8deg) scale(1); } 35% { transform: rotate(8deg) scale(1.08); } 48% { transform: rotate(-5deg) scale(1); } 100% { transform: rotate(-10deg) scale(1); } }
+  @keyframes banana-fall { 0% { opacity: 0; transform: translateY(-1rem) rotate(0); } 12% { opacity: 1; } 100% { opacity: 0; transform: translateY(13rem) rotate(390deg); } }
+  .results-subtitle { margin: 0 0 1.25rem; color: #6b6044; font-weight: 700; }
+  .results-section { margin-top: 1.25rem; }
+  .results-section h3 { margin: 0 0 .65rem; font: 900 1.15rem/1 Georgia, serif; }
+  .results-awards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; }
+  .result-award { min-width: 0; padding: .75rem; border: 2px solid var(--tr-ink); border-radius: 10px; background: #fff; box-shadow: 3px 3px 0 var(--tr-ink); }
+  .result-award small { display: block; margin-bottom: .2rem; color: #756849; font-size: .68rem; font-weight: 900; letter-spacing: .07em; text-transform: uppercase; }
+  .result-award strong { display: block; overflow-wrap: anywhere; font: 900 1.15rem/1.1 Georgia, serif; }
+  .result-award span { display: block; margin-top: .25rem; color: #6b6044; font-size: .76rem; font-weight: 700; }
+  .results-leaderboard { display: grid; gap: .42rem; }
+  .result-player { display: grid; grid-template-columns: 2rem minmax(0, 1fr) repeat(3, auto); align-items: center; gap: .65rem; padding: .62rem .72rem; border: 2px solid var(--tr-ink); border-radius: 10px; background: color-mix(in srgb, var(--player-color) 18%, white); }
+  .result-player.is-winner { background: color-mix(in srgb, var(--player-color) 30%, var(--tr-yellow)); box-shadow: 3px 3px 0 var(--tr-ink); }
+  .result-player-rank { font: 900 1.15rem/1 Georgia, serif; text-align: center; }
+  .result-player-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 900; white-space: nowrap; }
+  .result-player-stat { min-width: 3.2rem; text-align: right; }
+  .result-player-stat b, .result-player-stat small { display: block; }
+  .result-player-stat small { color: #6b6044; font-size: .58rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+  .results-help { margin: -.25rem 0 .65rem; color: #6b6044; font-size: .78rem; }
+  .results-words { display: grid; gap: .75rem; }
+  .result-word-group strong { display: block; margin-bottom: .35rem; font-size: .78rem; }
+  .result-word-list { display: flex; flex-wrap: wrap; gap: .35rem; }
+  .result-word { padding: .38rem .55rem; border: 1.5px solid var(--tr-ink); border-radius: 7px; background: #fff; color: var(--tr-ink); font: 800 .78rem/1 inherit; box-shadow: 2px 2px 0 #8b7c54; }
+  .result-word.is-selected { background: var(--tr-yellow); box-shadow: 2px 2px 0 var(--tr-ink); }
+  .word-lookup { display: block; margin-top: .75rem; padding: .7rem; border: 2px solid var(--tr-ink); border-radius: 9px; background: #fff; color: var(--tr-ink); font-weight: 900; text-align: center; text-decoration: none; }
+  .word-lookup[hidden] { display: none; }
+  .results-actions { display: grid; grid-template-columns: 1fr 1fr; gap: .65rem; margin-top: 1.35rem; }
+  .results-actions button { min-height: 3rem; border: 2px solid var(--tr-ink); border-radius: 9px; background: #fff; color: var(--tr-ink); box-shadow: 2px 2px 0 var(--tr-ink); font-weight: 900; }
+  .results-actions .primary-action { background: var(--tr-yellow); box-shadow: 3px 3px 0 var(--tr-ink); }
+  .results-actions button:disabled { opacity: .55; box-shadow: none; }
+  .results-host-note { margin: .65rem 0 0; color: #6b6044; font-size: .75rem; text-align: center; }
   button[aria-busy='true'] { opacity: .7; pointer-events: none; }
   button[aria-busy='true']::after { content: ''; display: inline-block; width: .85em; height: .85em; margin-left: .5em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: -.1em; animation: button-spin .7s linear infinite; }
   @keyframes button-spin { to { transform: rotate(360deg); } }
-  .dialog-close { position: absolute; top: .6rem; right: .7rem; border: 0; background: transparent; color: var(--tr-ink); font-size: 1.7rem; cursor: pointer; }
+  .dialog-close { position: absolute; z-index: 4; top: .6rem; right: .7rem; border: 0; background: transparent; color: var(--tr-ink); font-size: 1.7rem; cursor: pointer; }
   .game-menu-actions { display: grid; gap: .7rem; margin-top: 1.2rem; }
   .game-menu-actions button { display: grid; gap: .3rem; width: 100%; padding: .9rem; border: 2px solid var(--tr-ink); border-radius: 10px; color: var(--tr-ink); box-shadow: 3px 3px 0 var(--tr-ink); text-align: left; cursor: pointer; }
   .game-menu-actions strong { font: 900 1rem/1.1 inherit; }
   .game-menu-actions span { color: #5d543d; font-size: .8rem; line-height: 1.3; }
   .new-game-action { background: var(--tr-yellow); }
+  .game-results-action { background: #d8f8e3; }
   .home-action { background: #fff; }
   .game-menu-actions button:disabled { opacity: .45; box-shadow: none; cursor: default; }
   .game-menu-actions button[hidden] { display: none; }
@@ -500,7 +583,13 @@
     .rack-actions > button { min-width: 0; flex: 1 1 0; padding-inline: .25rem; }
     .dump-button, .menu-button { width: auto; max-width: none; }
     .dump-button small { display: none; }
-    .game-menu-dialog, .invite-dialog, .leave-game-dialog { width: calc(100vw - 1rem); max-height: calc(100dvh - 1rem); padding: 1rem; border-radius: 14px; box-shadow: 4px 4px 0 var(--tr-ink); }
+    .game-menu-dialog, .invite-dialog, .leave-game-dialog, .results-dialog { width: calc(100vw - 1rem); max-height: calc(100dvh - 1rem); padding: 1rem; border-radius: 14px; box-shadow: 4px 4px 0 var(--tr-ink); }
+    .results-dialog { padding-top: 0; }
+    .results-hero { height: 120px; margin: 0 -1rem .9rem; }
+    .winner-banana { font-size: 5.2rem; }
+    .results-awards { grid-template-columns: 1fr 1fr; gap: .45rem; }
+    .result-player { grid-template-columns: 1.6rem minmax(0, 1fr) repeat(3, auto); gap: .35rem; padding-inline: .45rem; }
+    .result-player-stat { min-width: 2.5rem; font-size: .8rem; }
     .update-notice { justify-content: space-between; width: calc(100vw - 1.25rem); }
     .connection-notice { justify-content: space-between; width: calc(100vw - 1.25rem); }
   }
@@ -512,6 +601,9 @@
     .rack { max-height: 68px; }
     .rack-slot { flex-basis: 30px; width: 30px; height: 30px; }
     .letter-tile { width: 30px; height: 30px; font-size: .95rem; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .results-dialog.is-celebrating, .is-celebrating .winner-banana, .is-celebrating .banana-confetti i { animation: none; }
   }
 </style>
 

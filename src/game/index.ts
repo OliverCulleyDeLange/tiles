@@ -78,8 +78,18 @@ const DICTIONARY_FILES: Record<DictionaryId, string> = {
   fr: dictionaryFile('fr'),
   pt: dictionaryFile('pt'),
 };
+const WIKTIONARY_LANGUAGES: Record<DictionaryId, string> = {
+  'scowl-us': 'en',
+  'scowl-gb': 'en',
+  de: 'de',
+  es: 'es',
+  it: 'it',
+  fr: 'fr',
+  pt: 'pt',
+};
 
 export function createTiles(root: HTMLElement): void {
+  sessionStorage.removeItem('tiles-root-sw-recovery');
   const nameGate = root.querySelector<HTMLElement>('[data-view="name"]')!;
   const lobby = root.querySelector<HTMLElement>('[data-view="lobby"]')!;
   const game = root.querySelector<HTMLElement>('[data-view="game"]')!;
@@ -119,11 +129,23 @@ export function createTiles(root: HTMLElement): void {
   const gameMenu = root.querySelector<HTMLDialogElement>('[data-game-menu]')!;
   const gameMenuClose = root.querySelector<HTMLButtonElement>('[data-game-menu-close]')!;
   const newGame = root.querySelector<HTMLButtonElement>('[data-new-game]')!;
+  const gameResults = root.querySelector<HTMLButtonElement>('[data-game-results]')!;
   const bugReport = root.querySelector<HTMLButtonElement>('[data-bug-report]')!;
   const goHome = root.querySelector<HTMLButtonElement>('[data-go-home]')!;
   const leaveGameDialog = root.querySelector<HTMLDialogElement>('[data-leave-game-dialog]')!;
   const leaveGameConfirm = root.querySelector<HTMLButtonElement>('[data-leave-game-confirm]')!;
   const leaveGameCancel = root.querySelector<HTMLButtonElement>('[data-leave-game-cancel]')!;
+  const resultsDialog = root.querySelector<HTMLDialogElement>('[data-results-dialog]')!;
+  const resultsClose = root.querySelector<HTMLButtonElement>('[data-results-close]')!;
+  const resultsBoard = root.querySelector<HTMLButtonElement>('[data-results-board]')!;
+  const resultsRestart = root.querySelector<HTMLButtonElement>('[data-results-restart]')!;
+  const resultsTitle = root.querySelector<HTMLElement>('[data-results-title]')!;
+  const resultsSubtitle = root.querySelector<HTMLElement>('[data-results-subtitle]')!;
+  const resultsAwards = root.querySelector<HTMLElement>('[data-results-awards]')!;
+  const resultsLeaderboard = root.querySelector<HTMLElement>('[data-results-leaderboard]')!;
+  const resultsWords = root.querySelector<HTMLElement>('[data-results-words]')!;
+  const wordLookup = root.querySelector<HTMLAnchorElement>('[data-word-lookup]')!;
+  const resultsHostNote = root.querySelector<HTMLElement>('[data-results-host-note]')!;
   const bunch = root.querySelector<HTMLElement>('[data-bunch]')!;
   const peel = root.querySelector<HTMLElement>('[data-peel]')!;
   const dumps = root.querySelector<HTMLElement>('[data-dumps]')!;
@@ -717,6 +739,7 @@ export function createTiles(root: HTMLElement): void {
       loadedDictionary = dictionary;
       loadingDictionary = null;
       renderTiles();
+      if (resultsDialog.open && state?.phase === 'finished') renderResults();
     } catch {
       if (loadingDictionary !== dictionary) return;
       loadingDictionary = null;
@@ -731,6 +754,8 @@ export function createTiles(root: HTMLElement): void {
 
   function resetGameState(): void {
     setButtonLoading(newGame, false);
+    setButtonLoading(resultsRestart, false);
+    if (resultsDialog.open) resultsDialog.close();
     cancelDrag();
     clearEditHistory();
     tiles = [];
@@ -876,6 +901,7 @@ export function createTiles(root: HTMLElement): void {
         syncOwnBoard(state!);
         clearEditHistory();
       }
+      if (resultsDialog.open && state?.phase === 'finished') renderResults();
       if (!dragging && !gesture && !nativeGesture && !touchGesture) renderTiles();
     } else if (message.t === 'hand') {
       applyHand(message.tiles, message.replace);
@@ -2243,6 +2269,7 @@ export function createTiles(root: HTMLElement): void {
     newGame.disabled = myId !== next.hostId || next.players.length < 2;
     newGame.hidden = myId !== next.hostId;
     newGame.title = myId === next.hostId ? '' : 'Only the host can start a new game.';
+    gameResults.hidden = next.phase !== 'finished';
     void loadDictionary(dictionary);
 
     nameGate.hidden = true;
@@ -2267,6 +2294,11 @@ export function createTiles(root: HTMLElement): void {
     if (next.phase === 'finished' && next.winnerId && previousPhase !== 'finished') {
       const winner = next.players.find(player => player.id === next.winnerId);
       show(winner?.id === myId ? 'You are Top Banana!' : `${winner?.name ?? 'A player'} wins — you can finish your grid.`, 'good');
+      openResults(true);
+    } else if (next.phase === 'finished' && resultsDialog.open) {
+      renderResults();
+    } else if (next.phase !== 'finished' && resultsDialog.open) {
+      resultsDialog.close();
     }
     if (previousPeel != null && next.peel > previousPeel) {
       peelAnimation.classList.remove('is-playing');
@@ -2911,6 +2943,85 @@ export function createTiles(root: HTMLElement): void {
       }
     }
     return words;
+  }
+
+  function renderResults(): void {
+    if (!state || state.phase !== 'finished') return;
+    const room = state;
+    const rows = room.players.map((player, index) => {
+      const board = player.id === myId ? boardPayload() : player.board;
+      const rotation = areaFor(player, index, room.players.length)?.rotation ?? 0;
+      const found = findWords(board, rotation);
+      const words = loadedDictionary === room.dictionary
+        ? found.filter(word => dictionaryWords.has(word.text))
+        : found;
+      const longest = words.reduce<FoundWord | null>((best, word) =>
+        !best || word.text.length > best.text.length ? word : best, null);
+      const stats = player.stats ?? { dumps: 0, peels: 0, bestPeelStreak: 0 };
+      return { player, index, words, longest, stats, placed: board.length };
+    });
+    const winner = rows.find(row => row.player.id === room.winnerId);
+    resultsTitle.textContent = winner?.player.id === myId
+      ? 'You’re Top Banana!'
+      : `${winner?.player.name ?? 'A player'} is Top Banana!`;
+    resultsSubtitle.textContent = winner?.player.id === myId
+      ? 'You cleared your rack first. Here’s how the game unfolded.'
+      : 'The winner is in. You can close this and keep finishing your grid.';
+
+    const maxWordLength = Math.max(0, ...rows.map(row => row.longest?.text.length ?? 0));
+    const longestRows = rows.filter(row => (row.longest?.text.length ?? 0) === maxWordLength && maxWordLength > 0);
+    const longestWords = [...new Set(longestRows.flatMap(row =>
+      row.words.filter(word => word.text.length === maxWordLength).map(word => word.text)))].join(' · ');
+    const maxWords = Math.max(0, ...rows.map(row => row.words.length));
+    const maxDumps = Math.max(0, ...rows.map(row => row.stats.dumps));
+    const maxStreak = Math.max(0, ...rows.map(row => row.stats.bestPeelStreak));
+    const namesFor = (predicate: (row: typeof rows[number]) => boolean): string =>
+      rows.filter(predicate).map(row => row.player.name).join(' · ');
+    const award = (label: string, value: string, detail: string): string =>
+      `<article class="result-award"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong><span>${escapeHtml(detail)}</span></article>`;
+    resultsAwards.innerHTML = [
+      award('Longest word', longestWords || 'No words yet', maxWordLength ? `${maxWordLength} letters · ${namesFor(row => (row.longest?.text.length ?? 0) === maxWordLength)}` : 'Keep building'),
+      award('Most words', String(maxWords), maxWords ? namesFor(row => row.words.length === maxWords) : 'No completed words'),
+      award('Most dumps', maxDumps ? String(maxDumps) : 'None', maxDumps ? namesFor(row => row.stats.dumps === maxDumps) : 'Clean racks all round'),
+      award('Best peel streak', maxStreak ? `${maxStreak}×` : 'None', maxStreak ? namesFor(row => row.stats.bestPeelStreak === maxStreak) : 'No peels recorded'),
+    ].join('');
+
+    const ordered = [...rows].sort((a, b) =>
+      Number(b.player.id === room.winnerId) - Number(a.player.id === room.winnerId)
+      || b.words.length - a.words.length
+      || b.placed - a.placed
+      || a.player.name.localeCompare(b.player.name));
+    resultsLeaderboard.innerHTML = ordered.map((row, rank) => {
+      const color = colorForPlayer(row.player, row.index);
+      return `<div class="result-player ${row.player.id === room.winnerId ? 'is-winner' : ''}" style="--player-color:${color}"><span class="result-player-rank">${row.player.id === room.winnerId ? '♛' : rank + 1}</span><span class="result-player-name">${escapeHtml(row.player.name)}${row.player.id === myId ? ' · You' : ''}</span><span class="result-player-stat"><b>${row.words.length}</b><small>Words</small></span><span class="result-player-stat"><b>${row.stats.dumps}</b><small>Dumps</small></span><span class="result-player-stat"><b>${row.stats.bestPeelStreak}×</b><small>Streak</small></span></div>`;
+    }).join('');
+
+    resultsWords.innerHTML = rows.map(row => {
+      const unique = [...new Set(row.words.map(word => word.text))]
+        .sort((a, b) => b.length - a.length || a.localeCompare(b));
+      if (!unique.length) return '';
+      return `<div class="result-word-group"><strong>${escapeHtml(row.player.name)}</strong><div class="result-word-list">${unique.map(word => `<button type="button" class="result-word" data-result-word="${escapeHtml(word)}">${escapeHtml(word)}</button>`).join('')}</div></div>`;
+    }).join('') || '<p class="results-help">No completed words to show yet.</p>';
+    wordLookup.hidden = true;
+    wordLookup.removeAttribute('href');
+
+    const isHost = myId === room.hostId;
+    resultsRestart.disabled = !isHost || room.players.length < 2;
+    resultsRestart.textContent = isHost ? 'Play again' : 'Waiting for host…';
+    resultsHostNote.hidden = isHost;
+  }
+
+  function openResults(celebrate = false): void {
+    if (!state || state.phase !== 'finished') return;
+    renderResults();
+    if (gameMenu.open) gameMenu.close();
+    if (!resultsDialog.open) resultsDialog.showModal();
+    resultsDialog.scrollTop = 0;
+    resultsDialog.classList.remove('is-celebrating');
+    if (celebrate) {
+      void resultsDialog.offsetWidth;
+      resultsDialog.classList.add('is-celebrating');
+    }
   }
 
   function wordValidity(values: PlacedTile[], rotation = 0): Map<string, 'valid' | 'partial' | 'invalid'> {
@@ -3569,13 +3680,32 @@ export function createTiles(root: HTMLElement): void {
   });
   gameMenuOpen.addEventListener('click', () => gameMenu.showModal());
   gameMenuClose.addEventListener('click', () => gameMenu.close());
-  bugReport.addEventListener('click', () => { void saveBugReport(); });
-  newGame.addEventListener('click', () => {
-    if (!state || myId !== state.hostId || state.players.length < 2) return;
-    setButtonLoading(newGame, true, 'Starting new game…');
-    send({ t: 'new-game' });
+  gameResults.addEventListener('click', () => {
     gameMenu.close();
+    openResults();
   });
+  resultsClose.addEventListener('click', () => resultsDialog.close());
+  resultsBoard.addEventListener('click', () => resultsDialog.close());
+  resultsWords.addEventListener('click', event => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-result-word]');
+    const word = button?.dataset.resultWord;
+    if (!button || !word || !state) return;
+    resultsWords.querySelectorAll('.result-word.is-selected').forEach(element => element.classList.remove('is-selected'));
+    button.classList.add('is-selected');
+    const language = WIKTIONARY_LANGUAGES[state.dictionary];
+    wordLookup.href = `https://${language}.wiktionary.org/wiki/${encodeURIComponent(word.toLocaleLowerCase())}`;
+    wordLookup.textContent = `Look up “${word}” on Wiktionary ↗`;
+    wordLookup.hidden = false;
+  });
+  bugReport.addEventListener('click', () => { void saveBugReport(); });
+  const requestNewGame = (button: HTMLButtonElement): void => {
+    if (!state || myId !== state.hostId || state.players.length < 2) return;
+    setButtonLoading(button, true, 'Starting new game…');
+    send({ t: 'new-game' });
+    if (gameMenu.open) gameMenu.close();
+  };
+  newGame.addEventListener('click', () => requestNewGame(newGame));
+  resultsRestart.addEventListener('click', () => requestNewGame(resultsRestart));
   async function leaveToHome(forgetLobby: boolean): Promise<void> {
     const leavingRoom = roomName;
     const leavingNearbyHost = connectionMode === 'nearby-host';
@@ -3625,6 +3755,10 @@ export function createTiles(root: HTMLElement): void {
     void leaveToHome(false);
   });
   (window as typeof window & { tilesHandleNativeBack?: () => boolean }).tilesHandleNativeBack = () => {
+    if (resultsDialog.open) {
+      resultsDialog.close();
+      return true;
+    }
     if (leaveGameDialog.open) {
       leaveGameDialog.close();
       return true;
