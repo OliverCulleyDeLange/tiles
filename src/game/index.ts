@@ -178,6 +178,7 @@ export function createTiles(root: HTMLElement): void {
   let nearbyConnectionAttemptTimer: number | null = null;
   let nearbyHelloTimer: number | null = null;
   let nearbyLobbyConnectTimer: number | null = null;
+  let nearbyTriedReverseRoute = false;
   let nearbyAwaitingWelcome = false;
   let nearbyHomeRefreshTimer: number | null = null;
   let nearbyHomeGeneration = 0;
@@ -1239,6 +1240,23 @@ export function createTiles(root: HTMLElement): void {
         nearbyLobbyConnectTimer = null;
         if (connectionMode !== 'nearby-join' || state) return;
         const endpointId = nearbyHostId ?? nearbyConnectingId;
+        if (!nearbyTriedReverseRoute && nearbyConnectingId) {
+          diagnose('nearby-route-reversal', { hostName: nearbyHostName || hostName, endpointId });
+          clearNearbyHelloTimer();
+          clearNearbyConnectionAttemptTimer();
+          clearNearbyReconnectTimer();
+          nearbyAwaitingWelcome = false;
+          nearbyTriedReverseRoute = true;
+          nearbyAutoReconnect = true;
+          nearbyHostId = null;
+          nearbyConnectingId = null;
+          transportSend = null;
+          if (endpointId) void NearbyConnections.disconnect({ endpointId }).catch(() => undefined);
+          showNearbyLobbyLoading(nearbyHostName || hostName, 'Switching connection route…');
+          setNearbyPeerState(nearbyHostName || hostName, 'searching', 'First route unavailable · trying reverse connection automatically');
+          scheduleNearbyTransport(0);
+          return;
+        }
         diagnose('nearby-lobby-connect-timeout', { hostName: nearbyHostName || hostName, endpointId });
         clearNearbyHelloTimer();
         clearNearbyConnectionAttemptTimer();
@@ -1251,7 +1269,7 @@ export function createTiles(root: HTMLElement): void {
         if (endpointId) void NearbyConnections.disconnect({ endpointId }).catch(() => undefined);
         roster.innerHTML = '<li class="is-loading">Secure connection timed out.</li>';
         connectionLost('Secure connection timed out after 10 seconds. Tap Retry to try again.');
-      }, 10_000);
+      }, nearbyTriedReverseRoute ? 10_000 : 6_000);
     }
   }
 
@@ -1584,6 +1602,7 @@ export function createTiles(root: HTMLElement): void {
         nearbyHostName = invitation.name;
         nearbyConnectingId = invitation.endpointId;
         nearbyAutoReconnect = true;
+        nearbyTriedReverseRoute = false;
         showNearbyLobbyLoading(invitation.name);
         // Home mode deliberately advertises and discovers at the same time.
         // Quiesce both roles before accepting the verification so iOS does not
@@ -1928,11 +1947,12 @@ export function createTiles(root: HTMLElement): void {
         nearbyInviteStates.delete(endpoint.endpointId);
         selectedNearbyIds.delete(endpoint.endpointId);
         if (pendingInvite) {
+          setNearbyPeerState(endpoint.name, 'searching', 'First route unavailable · waiting for reverse connection');
           if (state) {
             renderLobbyRoster(state);
             renderPlayerDisconnect(state);
           }
-          show(`${endpoint.name} could not be invited.`, 'bad');
+          show(`${endpoint.name} is switching connection route…`, 'good');
           if (outgoingNearbyInvites.size === 0) scheduleNearbyTransport(0);
           return;
         }
@@ -1951,6 +1971,7 @@ export function createTiles(root: HTMLElement): void {
         clearNearbyLobbyConnectTimer();
         nearbyConnectingId = null;
         nearbyAutoReconnect = true;
+        nearbyTriedReverseRoute = true;
         showNearbyLobbyLoading(nearbyHostName || endpoint.name, 'Switching connection route…');
         setNearbyPeerState(endpoint.name, 'searching', 'First route unavailable · trying reverse connection automatically');
         scheduleNearbyTransport(0);
@@ -2103,6 +2124,7 @@ export function createTiles(root: HTMLElement): void {
         nearbyAutoReconnect = true;
         nearbyConnectingId = null;
         nearbyReconnectAttempt = 0;
+        nearbyTriedReverseRoute = true;
         roomName = 'nearby';
         nameInput.value = name;
         localStorage.setItem('tiles-name', name);
@@ -3547,6 +3569,7 @@ export function createTiles(root: HTMLElement): void {
     nearbyHostName = '';
     nearbyAutoReconnect = false;
     nearbyConnectingId = null;
+    nearbyTriedReverseRoute = false;
     state = null;
     connectionRestored();
     if (isNativeNearby()) await NearbyConnections.stop().catch(() => undefined);
@@ -3594,6 +3617,7 @@ export function createTiles(root: HTMLElement): void {
       return;
     }
     if (connectionMode === 'nearby-join') {
+      nearbyTriedReverseRoute = true;
       showNearbyLobbyLoading(nearbyHostName || 'host', `Finding ${nearbyHostName || 'host'} nearby…`);
       lobbyConnectionNotice.hidden = true;
       connectionMessage.textContent = 'Reconnecting to the nearby host…';
