@@ -176,6 +176,16 @@
       </div>
     </dialog>
 
+    <dialog class="leave-game-dialog" data-leave-game-dialog>
+      <p class="eyebrow">Leave game?</p>
+      <h2>Go back to the home screen?</h2>
+      <p>You’ll disconnect from the other players. You can rejoin the game from home.</p>
+      <div class="leave-game-dialog-actions">
+        <button type="button" data-leave-game-confirm>Go to home</button>
+        <button type="button" class="primary-action" data-leave-game-cancel autofocus>Stay in game</button>
+      </div>
+    </dialog>
+
     <div class="peel-animation" data-peel-animation aria-hidden="true"><span>🍌</span><strong>PEEL!</strong></div>
 
     <dialog class="invite-dialog" data-invite-dialog>
@@ -424,13 +434,14 @@
   .rack-slot { flex: 0 0 48px; width: 48px; height: 48px; }
   .rack-slot:empty { border: 1px dashed rgba(255,255,255,.16); border-radius: 6px; }
   .rack-slot > .letter-tile { display: grid; }
-  .game-menu-dialog, .invite-dialog { width: min(520px, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; border: 3px solid var(--tr-ink); border-radius: 18px; background: var(--tr-cream); color: var(--tr-ink); padding: 1.4rem; box-shadow: 9px 9px 0 var(--tr-ink); }
-  .game-menu-dialog::backdrop, .invite-dialog::backdrop { background: rgba(23,21,15,.65); backdrop-filter: blur(4px); }
-  .game-menu-dialog h2, .invite-dialog h2 { margin: 0 0 .5rem; font: 900 2rem/1 Georgia, serif; }
-  .invite-dialog > p:not(.eyebrow) { color: #6b6044; }
-  .invite-dialog-actions { display: grid; grid-template-columns: 1fr 1fr; gap: .65rem; margin-top: 1.2rem; }
-  .invite-dialog-actions button { min-height: 3rem; border: 2px solid var(--tr-ink); border-radius: 9px; background: #fff; color: var(--tr-ink); box-shadow: 2px 2px 0 var(--tr-ink); font-weight: 800; }
+  .game-menu-dialog, .invite-dialog, .leave-game-dialog { width: min(520px, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; border: 3px solid var(--tr-ink); border-radius: 18px; background: var(--tr-cream); color: var(--tr-ink); padding: 1.4rem; box-shadow: 9px 9px 0 var(--tr-ink); }
+  .game-menu-dialog::backdrop, .invite-dialog::backdrop, .leave-game-dialog::backdrop { background: rgba(23,21,15,.65); backdrop-filter: blur(4px); }
+  .game-menu-dialog h2, .invite-dialog h2, .leave-game-dialog h2 { margin: 0 0 .5rem; font: 900 2rem/1 Georgia, serif; }
+  .invite-dialog > p:not(.eyebrow), .leave-game-dialog > p:not(.eyebrow) { color: #6b6044; }
+  .invite-dialog-actions, .leave-game-dialog-actions { display: grid; grid-template-columns: 1fr 1fr; gap: .65rem; margin-top: 1.2rem; }
+  .invite-dialog-actions button, .leave-game-dialog-actions button { min-height: 3rem; border: 2px solid var(--tr-ink); border-radius: 9px; background: #fff; color: var(--tr-ink); box-shadow: 2px 2px 0 var(--tr-ink); font-weight: 800; }
   .invite-dialog-actions [data-invite-accept] { background: var(--tr-yellow); box-shadow: 3px 3px 0 var(--tr-ink); }
+  .leave-game-dialog-actions [data-leave-game-cancel] { background: var(--tr-yellow); box-shadow: 3px 3px 0 var(--tr-ink); }
   button[aria-busy='true'] { opacity: .7; pointer-events: none; }
   button[aria-busy='true']::after { content: ''; display: inline-block; width: .85em; height: .85em; margin-left: .5em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: -.1em; animation: button-spin .7s linear infinite; }
   @keyframes button-spin { to { transform: rotate(360deg); } }
@@ -489,7 +500,7 @@
     .rack-actions > button { min-width: 0; flex: 1 1 0; padding-inline: .25rem; }
     .dump-button, .menu-button { width: auto; max-width: none; }
     .dump-button small { display: none; }
-    .game-menu-dialog, .invite-dialog { width: calc(100vw - 1rem); max-height: calc(100dvh - 1rem); padding: 1rem; border-radius: 14px; box-shadow: 4px 4px 0 var(--tr-ink); }
+    .game-menu-dialog, .invite-dialog, .leave-game-dialog { width: calc(100vw - 1rem); max-height: calc(100dvh - 1rem); padding: 1rem; border-radius: 14px; box-shadow: 4px 4px 0 var(--tr-ink); }
     .update-notice { justify-content: space-between; width: calc(100vw - 1.25rem); }
     .connection-notice { justify-content: space-between; width: calc(100vw - 1.25rem); }
   }

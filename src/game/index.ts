@@ -121,6 +121,9 @@ export function createTiles(root: HTMLElement): void {
   const newGame = root.querySelector<HTMLButtonElement>('[data-new-game]')!;
   const bugReport = root.querySelector<HTMLButtonElement>('[data-bug-report]')!;
   const goHome = root.querySelector<HTMLButtonElement>('[data-go-home]')!;
+  const leaveGameDialog = root.querySelector<HTMLDialogElement>('[data-leave-game-dialog]')!;
+  const leaveGameConfirm = root.querySelector<HTMLButtonElement>('[data-leave-game-confirm]')!;
+  const leaveGameCancel = root.querySelector<HTMLButtonElement>('[data-leave-game-cancel]')!;
   const bunch = root.querySelector<HTMLElement>('[data-bunch]')!;
   const peel = root.querySelector<HTMLElement>('[data-peel]')!;
   const dumps = root.querySelector<HTMLElement>('[data-dumps]')!;
@@ -3616,7 +3619,16 @@ export function createTiles(root: HTMLElement): void {
     setButtonLoading(goHome, true, 'Leaving…');
     void leaveToHome(false);
   });
+  leaveGameCancel.addEventListener('click', () => leaveGameDialog.close());
+  leaveGameConfirm.addEventListener('click', () => {
+    setButtonLoading(leaveGameConfirm, true, 'Leaving…');
+    void leaveToHome(false);
+  });
   (window as typeof window & { tilesHandleNativeBack?: () => boolean }).tilesHandleNativeBack = () => {
+    if (leaveGameDialog.open) {
+      leaveGameDialog.close();
+      return true;
+    }
     if (inviteDialog.open) {
       inviteDialog.close();
       return true;
@@ -3625,7 +3637,12 @@ export function createTiles(root: HTMLElement): void {
       gameMenu.close();
       return true;
     }
-    if (!lobby.hidden || !game.hidden) {
+    if (!game.hidden) {
+      leaveGameDialog.showModal();
+      leaveGameCancel.focus();
+      return true;
+    }
+    if (!lobby.hidden) {
       void leaveToHome(false);
       return true;
     }
