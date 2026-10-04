@@ -205,6 +205,7 @@ export function createTiles(root: HTMLElement): void {
   const pendingNearbyPackets = new Map<string, PendingNearbyPacket>();
   let nearbyHomeStarting = false;
   let nearbyHomeRestart: Promise<void> | null = null;
+  let nameChangeTimer: number | null = null;
   let nearbyHomePhase: 'idle' | 'permission' | 'permission-required' | 'starting' | 'visible' | 'searching' | 'failed' = 'idle';
   let nearbySuspended = false;
   let pendingNearbyInvite: NearbyVerification | null = null;
@@ -527,13 +528,24 @@ export function createTiles(root: HTMLElement): void {
     colorInputs.forEach(input => { input.checked = input.value === selected; });
   }
 
+  const storedNearbyDeviceId = localStorage.getItem('tiles-nearby-device-id');
+  const nearbyDeviceId = storedNearbyDeviceId && /^[a-f0-9]{8}$/.test(storedNearbyDeviceId)
+    ? storedNearbyDeviceId
+    : crypto.randomUUID().replaceAll('-', '').slice(0, 8);
+  localStorage.setItem('tiles-nearby-device-id', nearbyDeviceId);
+
   const nearbyWireName = (name = nearbyName): string =>
-    `tiles5|${selectedPlayerColor().slice(1)}|${sanitizeName(name)}`;
+    `tiles6|${selectedPlayerColor().slice(1)}|${nearbyDeviceId}|${sanitizeName(name)}`;
 
   function decodeNearbyEndpoint<T extends NearbyEndpoint>(endpoint: T): T {
-    const match = /^tiles5\|([0-9a-f]{6})\|(.+)$/i.exec(endpoint.name);
+    const match = /^tiles6\|([0-9a-f]{6})\|([0-9a-f]{8})\|(.+)$/i.exec(endpoint.name);
     if (!match) return endpoint;
-    return { ...endpoint, name: sanitizeName(match[2]), color: sanitizePlayerColor(`#${match[1].toLowerCase()}`) };
+    return {
+      ...endpoint,
+      name: sanitizeName(match[3]),
+      color: sanitizePlayerColor(`#${match[1].toLowerCase()}`),
+      deviceId: match[2].toLowerCase(),
+    };
   }
 
   function colorForPlayer(player: PlayerSummary | undefined, index = 0): string {
@@ -1690,7 +1702,9 @@ export function createTiles(root: HTMLElement): void {
         setNearbyPeerState(endpoint.name, 'found', 'Nearby advertisement found · endpoint is reachable');
       }
       for (const [knownId, known] of nearbyEndpointMap) {
-        if (knownId !== endpoint.endpointId && known.name.trim().toLocaleLowerCase() === endpoint.name.trim().toLocaleLowerCase()) {
+        const sameDevice = endpoint.deviceId && known.deviceId === endpoint.deviceId;
+        const sameName = known.name.trim().toLocaleLowerCase() === endpoint.name.trim().toLocaleLowerCase();
+        if (knownId !== endpoint.endpointId && (sameDevice || sameName)) {
           nearbyEndpointMap.delete(knownId);
           selectedNearbyIds.delete(knownId);
         }
@@ -3106,13 +3120,22 @@ export function createTiles(root: HTMLElement): void {
     event.preventDefault();
     void answerNearbyInvitation(false);
   });
-  nameInput.addEventListener('input', updateHomeReadiness);
-  nameInput.addEventListener('change', async () => {
+  async function commitNameChange(): Promise<void> {
     const name = sanitizeName(nameInput.value);
-    if (!name || state || !isNativeNearby()) return;
+    if (!name) return;
+    const previousName = sanitizeName(localStorage.getItem('tiles-name'));
     localStorage.setItem('tiles-name', name);
+    if (name === previousName || state || !isNativeNearby()) return;
     if (connectionMode === 'nearby-home' || nearbyHomeRestart) await restartNearbyHome();
     else void startNearbyHome();
+  }
+  nameInput.addEventListener('input', () => {
+    updateHomeReadiness();
+    if (nameChangeTimer != null) window.clearTimeout(nameChangeTimer);
+    nameChangeTimer = window.setTimeout(() => {
+      nameChangeTimer = null;
+      void commitNameChange();
+    }, 500);
   });
   dictionarySelect.addEventListener('change', () => {
     const dictionary = dictionarySelect.value as DictionaryId;
