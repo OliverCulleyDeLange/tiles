@@ -177,6 +177,7 @@ export function createTiles(root: HTMLElement): void {
   let nearbyReconnectTimer: number | null = null;
   let nearbyConnectionAttemptTimer: number | null = null;
   let nearbyHelloTimer: number | null = null;
+  let nearbyLobbyConnectTimer: number | null = null;
   let nearbyAwaitingWelcome = false;
   let nearbyHomeRefreshTimer: number | null = null;
   let nearbyHomeGeneration = 0;
@@ -759,6 +760,7 @@ export function createTiles(root: HTMLElement): void {
     if (message.t === 'welcome') {
       nearbyAwaitingWelcome = false;
       clearNearbyHelloTimer();
+      clearNearbyLobbyConnectTimer();
       myId = message.id;
       viewingPlayerId ??= myId;
       if (message.resumeToken) localStorage.setItem(sessionKey(), message.resumeToken);
@@ -976,6 +978,11 @@ export function createTiles(root: HTMLElement): void {
   function clearNearbyHelloTimer(): void {
     if (nearbyHelloTimer != null) window.clearTimeout(nearbyHelloTimer);
     nearbyHelloTimer = null;
+  }
+
+  function clearNearbyLobbyConnectTimer(): void {
+    if (nearbyLobbyConnectTimer != null) window.clearTimeout(nearbyLobbyConnectTimer);
+    nearbyLobbyConnectTimer = null;
   }
 
   function clearNearbyHomeRefreshTimer(invalidate = true): void {
@@ -1227,6 +1234,25 @@ export function createTiles(root: HTMLElement): void {
     chatInput.disabled = true;
     chatSend.disabled = true;
     lobbyHelp.textContent = 'Only the host can start the game.';
+    if (nearbyLobbyConnectTimer == null) {
+      nearbyLobbyConnectTimer = window.setTimeout(() => {
+        nearbyLobbyConnectTimer = null;
+        if (connectionMode !== 'nearby-join' || state) return;
+        const endpointId = nearbyHostId ?? nearbyConnectingId;
+        diagnose('nearby-lobby-connect-timeout', { hostName: nearbyHostName || hostName, endpointId });
+        clearNearbyHelloTimer();
+        clearNearbyConnectionAttemptTimer();
+        clearNearbyReconnectTimer();
+        nearbyAwaitingWelcome = false;
+        nearbyAutoReconnect = false;
+        nearbyHostId = null;
+        nearbyConnectingId = null;
+        transportSend = null;
+        if (endpointId) void NearbyConnections.disconnect({ endpointId }).catch(() => undefined);
+        roster.innerHTML = '<li class="is-loading">Secure connection timed out.</li>';
+        connectionLost('Secure connection timed out after 10 seconds. Tap Retry to try again.');
+      }, 10_000);
+    }
   }
 
   function sendNearbyHello(): void {
@@ -1565,6 +1591,7 @@ export function createTiles(root: HTMLElement): void {
       nearbyStatus.textContent = accept ? `Joining ${invitation.name}'s game…` : `Declined ${invitation.name}'s game.`;
     } catch {
       if (accept) {
+        clearNearbyLobbyConnectTimer();
         connectionMode = 'nearby-home';
         nearbyConnectingId = null;
         nearbyAutoReconnect = false;
@@ -3486,6 +3513,7 @@ export function createTiles(root: HTMLElement): void {
     clearNearbyReconnectTimer();
     clearNearbyConnectionAttemptTimer();
     clearNearbyHelloTimer();
+    clearNearbyLobbyConnectTimer();
     clearNearbyHomeRefreshTimer();
     clearAllNearbyChannels();
     transportSend = null;
@@ -3545,6 +3573,8 @@ export function createTiles(root: HTMLElement): void {
       return;
     }
     if (connectionMode === 'nearby-join') {
+      showNearbyLobbyLoading(nearbyHostName || 'host', `Finding ${nearbyHostName || 'host'} nearby…`);
+      lobbyConnectionNotice.hidden = true;
       connectionMessage.textContent = 'Reconnecting to the nearby host…';
       lobbyConnectionMessage.textContent = 'Reconnecting to the nearby host…';
       nearbyAutoReconnect = true;
