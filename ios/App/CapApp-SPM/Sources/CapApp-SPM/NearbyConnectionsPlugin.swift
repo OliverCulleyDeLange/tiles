@@ -36,6 +36,8 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
     private var localName = "Tiles player"
     private var isAdvertising = false
     private var isDiscovering = false
+    private var isStopping = false
+    private var stopCompletions: [() -> Void] = []
 
     public override func load() {
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
@@ -55,8 +57,10 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc public func isAvailable(_ call: CAPPluginCall) { call.resolve(["available": true]) }
 
     @objc public override func requestPermissions(_ call: CAPPluginCall) {
-        locationManager.requestWhenInUseAuthorization()
-        call.resolve(["nearby": "prompted"])
+        DispatchQueue.main.async { [weak self] in
+            self?.locationManager.requestWhenInUseAuthorization()
+            call.resolve(["nearby": "prompted"])
+        }
     }
 
     @objc public func requestNotificationPermission(_ call: CAPPluginCall) {
@@ -73,49 +77,83 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc public func startAdvertising(_ call: CAPPluginCall) {
-        localName = call.getString("name") ?? localName
-        if isAdvertising { call.resolve(); return }
-        let value: Advertiser
-        if let current = advertiser {
-            value = current
-        } else {
-            value = Advertiser(connectionManager: manager ?? configure())
-            value.delegate = self
-            advertiser = value
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { call.reject("Nearby plugin is unavailable"); return }
+            self.localName = call.getString("name") ?? self.localName
+            if self.isAdvertising { call.resolve(); return }
+            let value: Advertiser
+            if let current = self.advertiser {
+                value = current
+            } else {
+                value = Advertiser(connectionManager: self.manager ?? self.configure())
+                value.delegate = self
+                self.advertiser = value
+            }
+            self.isAdvertising = true
+            value.startAdvertising(using: Data(self.localName.utf8)) { error in
+                DispatchQueue.main.async {
+                    if let error {
+                        self.isAdvertising = false
+                        call.reject(error.localizedDescription)
+                    } else {
+                        call.resolve()
+                    }
+                }
+            }
         }
-        isAdvertising = true
-        value.startAdvertising(using: Data(localName.utf8))
-        call.resolve()
     }
 
     @objc public func stopAdvertising(_ call: CAPPluginCall) {
-        if !isAdvertising { call.resolve(); return }
-        isAdvertising = false
-        advertiser?.stopAdvertising()
-        call.resolve()
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isAdvertising, let advertiser = self.advertiser else { call.resolve(); return }
+            self.isAdvertising = false
+            advertiser.stopAdvertising { error in
+                DispatchQueue.main.async {
+                    if let error { call.reject(error.localizedDescription) }
+                    else { call.resolve() }
+                }
+            }
+        }
     }
 
     @objc public func startDiscovery(_ call: CAPPluginCall) {
-        localName = call.getString("name") ?? localName
-        if isDiscovering { call.resolve(); return }
-        let value: Discoverer
-        if let current = discoverer {
-            value = current
-        } else {
-            value = Discoverer(connectionManager: manager ?? configure())
-            value.delegate = self
-            discoverer = value
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { call.reject("Nearby plugin is unavailable"); return }
+            self.localName = call.getString("name") ?? self.localName
+            if self.isDiscovering { call.resolve(); return }
+            let value: Discoverer
+            if let current = self.discoverer {
+                value = current
+            } else {
+                value = Discoverer(connectionManager: self.manager ?? self.configure())
+                value.delegate = self
+                self.discoverer = value
+            }
+            self.isDiscovering = true
+            value.startDiscovery { error in
+                DispatchQueue.main.async {
+                    if let error {
+                        self.isDiscovering = false
+                        call.reject(error.localizedDescription)
+                    } else {
+                        call.resolve()
+                    }
+                }
+            }
         }
-        isDiscovering = true
-        value.startDiscovery()
-        call.resolve()
     }
 
     @objc public func stopDiscovery(_ call: CAPPluginCall) {
-        if !isDiscovering { call.resolve(); return }
-        isDiscovering = false
-        discoverer?.stopDiscovery()
-        call.resolve()
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isDiscovering, let discoverer = self.discoverer else { call.resolve(); return }
+            self.isDiscovering = false
+            discoverer.stopDiscovery { error in
+                DispatchQueue.main.async {
+                    if let error { call.reject(error.localizedDescription) }
+                    else { call.resolve() }
+                }
+            }
+        }
     }
 
     @objc public func setKeepAwake(_ call: CAPPluginCall) {
@@ -128,18 +166,28 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc public func requestConnection(_ call: CAPPluginCall) {
         guard let endpointID = call.getString("endpointId") else { call.reject("endpointId is required"); return }
-        discoverer?.requestConnection(to: endpointID, using: Data(localName.utf8))
-        call.resolve()
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let discoverer = self.discoverer else { call.reject("Discovery is not active"); return }
+            discoverer.requestConnection(to: endpointID, using: Data(self.localName.utf8)) { error in
+                DispatchQueue.main.async {
+                    if let error { call.reject(error.localizedDescription) }
+                    else { call.resolve() }
+                }
+            }
+        }
     }
 
     @objc public func acceptVerification(_ call: CAPPluginCall) {
-        guard let endpointID = call.getString("endpointId"), let handler = verifications.removeValue(forKey: endpointID) else {
-            call.reject("No pending verification"); return
+        guard let endpointID = call.getString("endpointId") else { call.reject("endpointId is required"); return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let handler = self.verifications.removeValue(forKey: endpointID) else {
+                call.reject("No pending verification"); return
+            }
+            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["invite-\(endpointID)"])
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["invite-\(endpointID)"])
+            handler(call.getBool("accept") ?? false)
+            call.resolve()
         }
-        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["invite-\(endpointID)"])
-        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["invite-\(endpointID)"])
-        handler(call.getBool("accept") ?? false)
-        call.resolve()
     }
 
     @objc public func send(_ call: CAPPluginCall) {
@@ -164,29 +212,58 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc public func disconnect(_ call: CAPPluginCall) {
-        if let endpointID = call.getString("endpointId") { manager?.disconnect(from: endpointID) }
-        call.resolve()
+        guard let endpointID = call.getString("endpointId") else { call.resolve(); return }
+        DispatchQueue.main.async { [weak self] in
+            guard let manager = self?.manager else { call.resolve(); return }
+            manager.disconnect(from: endpointID) { error in
+                DispatchQueue.main.async {
+                    if let error { call.reject(error.localizedDescription) }
+                    else { call.resolve() }
+                }
+            }
+        }
     }
 
     @objc public func stop(_ call: CAPPluginCall) {
-        stopNearbySession()
-        call.resolve()
+        stopNearbySession { call.resolve() }
     }
 
-    private func stopNearbySession() {
+    private func stopNearbySession(completion: (() -> Void)? = nil) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.stopNearbySession(completion: completion) }
+            return
+        }
+        if let completion { stopCompletions.append(completion) }
+        if isStopping { return }
+        isStopping = true
         isAdvertising = false
         isDiscovering = false
-        advertiser?.stopAdvertising()
-        discoverer?.stopDiscovery()
+        let group = DispatchGroup()
+        if let advertiser {
+            group.enter()
+            advertiser.stopAdvertising { _ in group.leave() }
+        }
+        if let discoverer {
+            group.enter()
+            discoverer.stopDiscovery { _ in group.leave() }
+        }
         if let manager {
             for endpointID in connectedEndpoints {
-                manager.disconnect(from: endpointID)
+                group.enter()
+                manager.disconnect(from: endpointID) { _ in group.leave() }
             }
         }
-        connectedEndpoints.removeAll()
-        advertiser = nil
-        discoverer = nil
-        DispatchQueue.main.async { UIApplication.shared.isIdleTimerDisabled = false }
+        group.notify(queue: .main) { [weak self] in
+            guard let self else { return }
+            self.connectedEndpoints.removeAll()
+            self.advertiser = nil
+            self.discoverer = nil
+            UIApplication.shared.isIdleTimerDisabled = false
+            self.isStopping = false
+            let completions = self.stopCompletions
+            self.stopCompletions.removeAll()
+            completions.forEach { $0() }
+        }
     }
 
     private func endpoint(_ id: EndpointID) -> [String: Any] {
