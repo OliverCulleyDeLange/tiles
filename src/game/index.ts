@@ -232,6 +232,7 @@ export function createTiles(root: HTMLElement): void {
   let selectedId: string | null = null;
   const selectedIds = new Set<string>();
   let peelSent = -1;
+  let applyingRoomHand = false;
   let dictionaryWords = new Set<string>();
   let loadedDictionary: DictionaryId | null = null;
   let loadingDictionary: DictionaryId | null = null;
@@ -802,8 +803,13 @@ export function createTiles(root: HTMLElement): void {
       updateRoom(message.room);
     } else if (message.t === 'room') {
       if (message.reset) resetGameState();
-      updateRoom(message.room);
-      if (message.hand) applyHand(message.hand.tiles, message.hand.replace);
+      applyingRoomHand = !!message.hand;
+      try {
+        updateRoom(message.room);
+        if (message.hand) applyHand(message.hand.tiles, message.hand.replace);
+      } finally {
+        applyingRoomHand = false;
+      }
       if (message.toast) show(message.toast.text, message.toast.tone);
     }
     else if (message.t === 'chat') {
@@ -2949,7 +2955,7 @@ export function createTiles(root: HTMLElement): void {
   }
 
   function maybePeel(): void {
-    if (!state || state.phase !== 'playing' || tiles.length === 0 || tiles.some(tile => tile.x == null)) return;
+    if (applyingRoomHand || !state || state.phase !== 'playing' || tiles.length === 0 || tiles.some(tile => tile.x == null)) return;
     const payload = boardPayload();
     if (!connected(payload) || !allWordsValid(payload) || peelSent === state.peel) return;
     peelSent = state.peel;

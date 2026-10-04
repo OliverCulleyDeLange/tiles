@@ -397,11 +397,13 @@
   .selection-marquee { position: absolute; z-index: 7; border: 2px solid #c44a35; border-radius: 5px; background: rgba(255, 102, 77, .18); box-shadow: 0 0 0 1px rgba(255,255,255,.7) inset; pointer-events: none; }
   .board-layer { position: absolute; left: 50%; top: 50%; width: 4800px; height: 4800px; margin: -2400px 0 0 -2400px; transform-origin: 50% 50%; background-color: #eee4c5; background-image: radial-gradient(ellipse at center, rgba(255,251,229,.92) 0%, rgba(238,228,197,.48) 48%, rgba(196,177,132,.28) 100%), radial-gradient(circle at 22% 31%, rgba(113,91,49,.13) 0 1.2px, transparent 1.8px), radial-gradient(circle at 71% 63%, rgba(255,255,255,.52) 0 1.4px, transparent 2px), radial-gradient(circle at 43% 78%, rgba(130,101,54,.09) 0 1px, transparent 1.7px); background-size: 100% 100%, 37px 41px, 53px 47px, 61px 59px; will-change: transform; }
   .board-layer.is-camera-animating { transition: transform .42s cubic-bezier(.22,.8,.28,1); }
-  .peel-animation { position: fixed; z-index: 100; inset: 0; display: grid; place-content: center; pointer-events: none; opacity: 0; transform: scale(.35) rotate(-18deg); }
-  .peel-animation span { font-size: clamp(5rem, 22vw, 12rem); filter: drop-shadow(0 .35rem 0 rgba(0,0,0,.18)); }
-  .peel-animation strong { text-align: center; font: 1000 clamp(2rem, 9vw, 5rem)/1 var(--font-display, sans-serif); color: #f4c400; -webkit-text-stroke: 2px var(--tr-ink); }
-  .peel-animation.is-playing { animation: peel-pop 1.15s cubic-bezier(.2,.8,.2,1); }
-  @keyframes peel-pop { 0% { opacity: 0; transform: scale(.25) rotate(-25deg); } 22%,70% { opacity: 1; transform: scale(1) rotate(8deg); } 100% { opacity: 0; transform: scale(1.35) rotate(20deg); } }
+  .peel-animation { position: fixed; z-index: 100; inset: 0; display: grid; place-content: center; justify-items: center; gap: .65rem; pointer-events: none; opacity: 0; transform: scale(.35); }
+  .peel-animation span { font-size: clamp(5rem, 22vw, 12rem); line-height: 1; filter: drop-shadow(0 .35rem 0 rgba(0,0,0,.18)); }
+  .peel-animation strong { padding: .22em .4em .16em; border: 3px solid var(--tr-ink); border-radius: 10px; background: var(--tr-yellow); color: var(--tr-ink); box-shadow: 5px 5px 0 var(--tr-ink); font: 900 clamp(2rem, 9vw, 5rem)/.9 Georgia, serif; letter-spacing: .025em; }
+  .peel-animation.is-playing { animation: peel-pop 2.4s cubic-bezier(.2,.8,.2,1); }
+  .peel-animation.is-playing span { animation: peel-wag 2.4s ease-in-out; }
+  @keyframes peel-pop { 0% { opacity: 0; transform: scale(.25); } 16% { opacity: 1; transform: scale(1.08); } 25%,76% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(1.22); } }
+  @keyframes peel-wag { 0%,16% { transform: rotate(-18deg); } 28% { transform: rotate(9deg); } 42% { transform: rotate(-6deg); } 58%,100% { transform: rotate(4deg); } }
   .board-origin { position: absolute; left: 50%; top: 50%; width: 8px; height: 8px; transform: translate(-50%, -50%); border-radius: 50%; background: var(--tr-coral); opacity: .4; }
   .player-area { position: absolute; z-index: 1; box-sizing: border-box; border: 5px solid var(--owner-color); border-radius: 22px; background: color-mix(in srgb, var(--owner-color) 8%, transparent); box-shadow: inset 0 0 0 2px rgba(255,255,255,.7); pointer-events: none; }
   .player-area.is-you { background: color-mix(in srgb, var(--owner-color) 14%, transparent); }
