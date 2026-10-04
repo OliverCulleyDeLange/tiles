@@ -1944,8 +1944,16 @@ export function createTiles(root: HTMLElement): void {
       else if (nearbyHostId === endpoint.endpointId) {
         beginNearbyReconnect();
       } else if (nearbyConnectingId === endpoint.endpointId) {
+        // Cross-platform BLE can fail when Android initiated the connection to
+        // an advertising iPhone, while the reverse direction succeeds. Treat
+        // that native rejection as part of the same join attempt: make this
+        // device discover the host and request the replacement connection.
+        clearNearbyLobbyConnectTimer();
         nearbyConnectingId = null;
-        scheduleNearbyTransport();
+        nearbyAutoReconnect = true;
+        showNearbyLobbyLoading(nearbyHostName || endpoint.name, 'Switching connection route…');
+        setNearbyPeerState(endpoint.name, 'searching', 'First route unavailable · trying reverse connection automatically');
+        scheduleNearbyTransport(0);
       }
     });
     await NearbyConnections.addListener('payloadReceived', rawEvent => {
