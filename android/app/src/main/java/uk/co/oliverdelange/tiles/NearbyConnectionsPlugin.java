@@ -136,7 +136,7 @@ public class NearbyConnectionsPlugin extends Plugin {
         if (advertising) { call.resolve(); return; }
         advertising = true;
         client.startAdvertising(name, SERVICE_ID, lifecycle,
-                new AdvertisingOptions.Builder().setStrategy(Strategy.P2P_STAR).build())
+                new AdvertisingOptions.Builder().setStrategy(Strategy.P2P_CLUSTER).build())
             .addOnSuccessListener(unused -> call.resolve())
             .addOnFailureListener(error -> {
                 advertising = false;
@@ -157,7 +157,7 @@ public class NearbyConnectionsPlugin extends Plugin {
         if (discovering) { call.resolve(); return; }
         discovering = true;
         client.startDiscovery(SERVICE_ID, discovery,
-                new DiscoveryOptions.Builder().setStrategy(Strategy.P2P_STAR).build())
+                new DiscoveryOptions.Builder().setStrategy(Strategy.P2P_CLUSTER).build())
             .addOnSuccessListener(unused -> call.resolve())
             .addOnFailureListener(error -> {
                 discovering = false;

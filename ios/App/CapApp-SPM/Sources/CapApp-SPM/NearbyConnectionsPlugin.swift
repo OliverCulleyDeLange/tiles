@@ -64,7 +64,7 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func configure() -> ConnectionManager {
-        let value = ConnectionManager(serviceID: serviceID, strategy: .star)
+        let value = ConnectionManager(serviceID: serviceID, strategy: .cluster)
         value.delegate = self
         manager = value
         return value

@@ -184,6 +184,7 @@ export function createTiles(root: HTMLElement): void {
   const nearbyReceiveBuffers = new Map<string, Map<number, ClientMessage | ServerMessage>>();
   const pendingNearbyPackets = new Map<string, PendingNearbyPacket>();
   let nearbyHomeStarting = false;
+  let nearbyHomePhase: 'idle' | 'permission' | 'permission-required' | 'starting' | 'visible' | 'searching' | 'failed' = 'idle';
   let nearbySuspended = false;
   let pendingNearbyInvite: NearbyVerification | null = null;
   let transportSend: ((message: object) => void) | null = null;
@@ -820,9 +821,15 @@ export function createTiles(root: HTMLElement): void {
       // another phone holding an endpoint ID whose GATT server no longer exists.
       await NearbyConnections.stopDiscovery().catch(() => undefined);
       if (!isCurrent()) return;
+      nearbyHomePhase = 'starting';
+      nearbyStatus.textContent = 'Restarting nearby discovery…';
+      renderNearbyEndpoints();
       await wait(350);
       if (!isCurrent()) return;
       await NearbyConnections.startDiscovery({ name });
+      nearbyHomePhase = 'searching';
+      nearbyStatus.textContent = '';
+      renderNearbyEndpoints();
       if (isCurrent()) scheduleNearbyHomeRefresh();
       return;
     }
@@ -832,13 +839,25 @@ export function createTiles(root: HTMLElement): void {
     // follows the same protocol, regardless of its platform, and a refresh
     // chooses again if the first pairing did not produce an endpoint.
     const advertiseFirst = crypto.getRandomValues(new Uint8Array(1))[0] % 2 === 0;
-    if (advertiseFirst) await NearbyConnections.startAdvertising({ name });
-    else await NearbyConnections.startDiscovery({ name });
+    if (advertiseFirst) {
+      await NearbyConnections.startAdvertising({ name });
+      nearbyHomePhase = 'visible';
+      nearbyStatus.textContent = 'Visible to nearby players · preparing search…';
+    } else {
+      await NearbyConnections.startDiscovery({ name });
+      nearbyHomePhase = 'searching';
+      nearbyStatus.textContent = '';
+    }
+    renderNearbyEndpoints();
     if (!isCurrent()) return;
     await wait(5_500);
     if (!isCurrent()) return;
-    if (advertiseFirst) await NearbyConnections.startDiscovery({ name });
-    else await NearbyConnections.startAdvertising({ name });
+    if (advertiseFirst) {
+      await NearbyConnections.startDiscovery({ name });
+      nearbyHomePhase = 'searching';
+      nearbyStatus.textContent = '';
+    } else await NearbyConnections.startAdvertising({ name });
+    renderNearbyEndpoints();
     if (isCurrent()) scheduleNearbyHomeRefresh();
   }
 
@@ -1084,7 +1103,6 @@ export function createTiles(root: HTMLElement): void {
   async function requestNearbyPermissions(): Promise<void> {
     if (Capacitor.getPlatform() === 'android') await NearbyConnections.ensurePermissions();
     else await NearbyConnections.requestPermissions(nearbyPermissionAliases?.length ? { permissions: nearbyPermissionAliases } : undefined);
-    await NearbyConnections.requestNotificationPermission().catch(() => undefined);
   }
 
   function nearbyPeerKey(name: string): string {
@@ -1296,7 +1314,23 @@ export function createTiles(root: HTMLElement): void {
     if (!nearbyEndpointMap.size) {
       const searching = document.createElement('div');
       searching.className = 'nearby-search';
-      searching.innerHTML = `<span aria-hidden="true">…</span><p>${nearbyHomeStarting ? 'Starting nearby discovery…' : 'Searching nearby…'}</p>`;
+      const message = nearbyHomePhase === 'permission' ? 'Nearby permission required · accept access to continue'
+        : nearbyHomePhase === 'permission-required' ? 'Nearby permission required'
+        : nearbyHomePhase === 'starting' ? 'Starting nearby radios…'
+        : nearbyHomePhase === 'visible' ? 'Visible nearby · preparing search…'
+        : nearbyHomePhase === 'searching' ? 'Searching nearby…'
+        : nearbyHomePhase === 'failed' ? 'Nearby search could not start'
+        : 'Nearby search has not started';
+      const active = nearbyHomePhase === 'starting' || nearbyHomePhase === 'visible' || nearbyHomePhase === 'searching';
+      searching.innerHTML = `${active ? '<span aria-hidden="true">…</span>' : ''}<p>${message}</p>`;
+      if (nearbyHomePhase === 'permission-required') {
+        searching.querySelector('span')?.remove();
+        const allow = document.createElement('button');
+        allow.type = 'button';
+        allow.textContent = 'Allow nearby access';
+        allow.addEventListener('click', () => { void startNearbyHome(); });
+        searching.append(allow);
+      }
       nearbyEndpoints.append(searching);
     }
     nearbyStartButton.hidden = selectedNearbyIds.size === 0;
@@ -1360,15 +1394,29 @@ export function createTiles(root: HTMLElement): void {
     connectionMode = 'nearby-home';
     clearNearbyHomeRefreshTimer();
     const generation = nearbyHomeGeneration;
-    nearbyStatus.textContent = 'Making you visible and looking for local players…';
+    nearbyHomePhase = 'permission';
+    nearbyStatus.textContent = 'Nearby permission is required before searching can begin.';
     renderNearbyEndpoints();
     try {
       await requestNearbyPermissions();
-      await runNearbyHomeRadios(name, false, generation);
-      nearbyStatus.textContent = '';
     } catch {
       connectionMode = null;
+      nearbyHomePhase = 'permission-required';
       nearbyStatus.textContent = 'Allow nearby-device access to find local players.';
+      nearbyHomeStarting = false;
+      renderNearbyEndpoints();
+      return;
+    }
+    void NearbyConnections.requestNotificationPermission().catch(() => undefined);
+    nearbyHomePhase = 'starting';
+    nearbyStatus.textContent = 'Starting nearby radios…';
+    renderNearbyEndpoints();
+    try {
+      await runNearbyHomeRadios(name, false, generation);
+    } catch {
+      connectionMode = null;
+      nearbyHomePhase = 'failed';
+      nearbyStatus.textContent = 'Nearby discovery could not start. Check Bluetooth and Wi-Fi.';
     } finally {
       nearbyHomeStarting = false;
       renderNearbyEndpoints();
