@@ -1,11 +1,6 @@
 package uk.co.oliverdelange.tiles;
 
 import android.Manifest;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
-import android.app.PendingIntent;
-import android.content.Context;
-import android.content.Intent;
 import android.os.Build;
 import android.view.WindowManager;
 
@@ -64,6 +59,9 @@ public class NearbyConnectionsPlugin extends Plugin {
     @Override
     public void load() {
         client = Nearby.getConnectionsClient(getContext());
+        android.app.NotificationManager notifications = (android.app.NotificationManager)
+            getContext().getSystemService(android.content.Context.NOTIFICATION_SERVICE);
+        notifications.cancelAll();
     }
 
     @Override
@@ -203,7 +201,6 @@ public class NearbyConnectionsPlugin extends Plugin {
         String endpointId = call.getString("endpointId");
         boolean accept = Boolean.TRUE.equals(call.getBoolean("accept"));
         if (endpointId == null || !verifications.containsKey(endpointId)) { call.reject("No pending verification"); return; }
-        ((NotificationManager) getContext().getSystemService(Context.NOTIFICATION_SERVICE)).cancel(endpointId.hashCode());
         verifications.remove(endpointId).accept(accept);
         call.resolve();
     }
@@ -250,32 +247,6 @@ public class NearbyConnectionsPlugin extends Plugin {
         return value;
     }
 
-    private void showInviteNotification(String id, String name) {
-        NotificationManager notifications = (NotificationManager) getContext().getSystemService(Context.NOTIFICATION_SERVICE);
-        String channelId = "tiles_game_invites";
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            notifications.createNotificationChannel(new NotificationChannel(channelId, "Game invitations", NotificationManager.IMPORTANCE_HIGH));
-        }
-        Intent launch = getContext().getPackageManager().getLaunchIntentForPackage(getContext().getPackageName());
-        PendingIntent pending = PendingIntent.getActivity(getContext(), id.hashCode(), launch, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        android.app.Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-            ? new android.app.Notification.Builder(getContext(), channelId)
-            : new android.app.Notification.Builder(getContext());
-        builder.setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("Tiles game invitation")
-            .setContentText(displayName(name) + " invited you to play")
-            .setContentIntent(pending)
-            .setAutoCancel(true);
-        notifications.notify(id.hashCode(), builder.build());
-    }
-
-    private String displayName(String wireName) {
-        if (wireName != null && wireName.matches("^tiles5\\|[0-9a-fA-F]{6}\\|.+$")) {
-            return wireName.substring(wireName.indexOf('|', 7) + 1);
-        }
-        return wireName == null ? "A nearby player" : wireName;
-    }
-
     private final EndpointDiscoveryCallback discovery = new EndpointDiscoveryCallback() {
         @Override public void onEndpointFound(String id, DiscoveredEndpointInfo info) {
             endpointNames.put(id, info.getEndpointName());
@@ -287,7 +258,6 @@ public class NearbyConnectionsPlugin extends Plugin {
     private final ConnectionLifecycleCallback lifecycle = new ConnectionLifecycleCallback() {
         @Override public void onConnectionInitiated(String id, ConnectionInfo info) {
             endpointNames.put(id, info.getEndpointName());
-            if (!outgoingConnections.contains(id)) showInviteNotification(id, info.getEndpointName());
             JSObject value = endpoint(id);
             String code = info.getAuthenticationToken();
             value.put("code", code == null || code.isEmpty() ? info.getAuthenticationDigits() : code);

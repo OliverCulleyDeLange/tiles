@@ -38,6 +38,8 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
     private var isDiscovering = false
 
     public override func load() {
+        UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(appDidEnterBackground),
@@ -191,10 +193,6 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
         ["endpointId": id, "name": endpointNames[id] ?? "Nearby player"]
     }
 
-    private func displayName(_ wireName: String) -> String {
-        let pieces = wireName.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false)
-        return pieces.count == 3 && pieces[0] == "tiles5" ? String(pieces[2]) : wireName
-    }
 }
 
 extension NearbyConnectionsPlugin: DiscovererDelegate {
@@ -210,11 +208,6 @@ extension NearbyConnectionsPlugin: DiscovererDelegate {
 extension NearbyConnectionsPlugin: AdvertiserDelegate {
     public func advertiser(_ advertiser: Advertiser, didReceiveConnectionRequestFrom endpointID: EndpointID, with context: Data, connectionRequestHandler: @escaping (Bool) -> Void) {
         endpointNames[endpointID] = String(data: context, encoding: .utf8) ?? "Nearby player"
-        let content = UNMutableNotificationContent()
-        content.title = "Tiles game invitation"
-        content.body = "\(displayName(endpointNames[endpointID] ?? "A nearby player")) invited you to play"
-        content.sound = .default
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "invite-\(endpointID)", content: content, trigger: nil))
         connectionRequestHandler(true)
     }
 }

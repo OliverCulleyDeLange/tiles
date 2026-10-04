@@ -208,6 +208,9 @@ export class LocalRoomHost {
       this.heartbeatStatus.set(peerId, { status: 'checking', at: Date.now() });
       this.deliver(peerId, { t: 'welcome', id: peerId, resumeToken: existingPeer.resumeToken, room: this.snapshot() });
       this.deliver(peerId, { t: 'hand', tiles: existingPeer.hand, replace: true });
+      // The returning peer receives its fresh snapshot above, but every other
+      // client (including the host UI) must also clear the stale offline flag.
+      this.broadcastRoom(peerId);
       return;
     }
     const name = sanitizeName(rawName);

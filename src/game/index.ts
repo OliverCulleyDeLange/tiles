@@ -1216,7 +1216,7 @@ export function createTiles(root: HTMLElement): void {
     transportSend = null;
     nearbyAutoReconnect = true;
     nearbyConnectingId = null;
-    connectionLost('Host disconnected. Game paused while reconnecting…');
+    connectionLost('Host disconnected. Reconnecting automatically…');
     scheduleNearbyTransport(0);
   }
 
@@ -1398,7 +1398,7 @@ export function createTiles(root: HTMLElement): void {
     const hostDisconnected = connectionMode === 'nearby-join'
       && disconnected.some(player => player.id === room.hostId);
     message.textContent = hostDisconnected
-      ? `${disconnected.find(player => player.id === room.hostId)?.name ?? 'Host'} disconnected — game paused while reconnecting.`
+      ? `${disconnected.find(player => player.id === room.hostId)?.name ?? 'Host'} disconnected — reconnecting automatically. You can keep arranging tiles.`
       : `${disconnected.map(player => player.name).join(', ')} disconnected.`;
     playerDisconnect.append(message);
   }
@@ -1592,7 +1592,6 @@ export function createTiles(root: HTMLElement): void {
       renderNearbyEndpoints();
       return;
     }
-    void NearbyConnections.requestNotificationPermission().catch(() => undefined);
     nearbyHomePhase = 'starting';
     nearbyStatus.textContent = 'Starting nearby radios…';
     renderNearbyEndpoints();
@@ -2226,7 +2225,7 @@ export function createTiles(root: HTMLElement): void {
       if (tile && (tile.x == null || tile.y == null)) slot.append(makeTile(tile, me, colorForPlayer(me, Math.max(0, myIndex)), canEditTiles(), 0));
       rack.append(slot);
     }
-    dump.disabled = !selectedId || (state?.bunch ?? 0) < 3 || state?.phase !== 'playing';
+    updateDumpAvailability();
     randomiseButton.disabled = !canEditTiles() || tiles.filter(tile => tile.x == null || tile.y == null).length < 2;
     updateHistoryButtons();
     maybePeel();
@@ -2234,6 +2233,10 @@ export function createTiles(root: HTMLElement): void {
 
   function canEditTiles(): boolean {
     return state?.phase === 'playing' || (state?.phase === 'finished' && state.winnerId !== myId);
+  }
+
+  function updateDumpAvailability(): void {
+    dump.disabled = selectedIds.size !== 1 || !selectedId || (state?.bunch ?? 0) < 3 || state?.phase !== 'playing';
   }
 
   function makePlayerArea(player: PlayerSummary, area: PlayerArea, color: string): HTMLElement {
@@ -3018,7 +3021,7 @@ export function createTiles(root: HTMLElement): void {
     if (clear) clearSelection();
     else {
       selectedId = [...selectedIds].at(-1) ?? null;
-      dump.disabled = !selectedId || (state?.bunch ?? 0) < 3 || state?.phase !== 'playing';
+      updateDumpAvailability();
     }
   }
 
@@ -3059,7 +3062,7 @@ export function createTiles(root: HTMLElement): void {
       if (selected && id) selectedIds.add(id);
     });
     selectedId = [...selectedIds].at(-1) ?? null;
-    dump.disabled = !selectedId || (state?.bunch ?? 0) < 3 || state?.phase !== 'playing';
+    updateDumpAvailability();
   }
 
   function resetAllGestures(): void {
@@ -3447,7 +3450,7 @@ export function createTiles(root: HTMLElement): void {
     restoreEdit(next);
   });
   dump.addEventListener('click', () => {
-    if (selectedId) {
+    if (selectedId && selectedIds.size === 1) {
       setButtonLoading(dump, true, 'Dumping…');
       send({ t: 'dump', tileId: selectedId });
     }
