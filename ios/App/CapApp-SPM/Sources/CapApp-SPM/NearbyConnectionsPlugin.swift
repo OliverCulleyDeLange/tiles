@@ -144,8 +144,21 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
         guard let endpointIDs = call.getArray("endpointIds", String.self), let payload = call.getString("payload") else {
             call.reject("endpointIds and payload are required"); return
         }
-        _ = manager?.send(Data(payload.utf8), to: endpointIDs, id: .unique())
-        call.resolve()
+        // NearbyConnections mutates its payload bookkeeping on the main queue.
+        // Calling send from Capacitor's bridge queue can race its progress
+        // callbacks and corrupt that dictionary, terminating the app.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let manager = self.manager else {
+                call.reject("Nearby connection is not active")
+                return
+            }
+            guard endpointIDs.allSatisfy(self.connectedEndpoints.contains) else {
+                call.reject("Nearby endpoint is disconnected")
+                return
+            }
+            _ = manager.send(Data(payload.utf8), to: endpointIDs, id: .unique())
+            call.resolve()
+        }
     }
 
     @objc public func disconnect(_ call: CAPPluginCall) {

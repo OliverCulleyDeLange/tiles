@@ -1275,21 +1275,18 @@ export function createTiles(root: HTMLElement): void {
     const heartbeat = playerHeartbeats.get(player.id);
     if (!heartbeat || heartbeat.status === 'checking') return { status: 'checking', text: 'Connected · checking availability…' };
     if (heartbeat.status === 'unavailable') return { status: 'unavailable', text: 'Connected · not responding' };
-    return {
-      status: 'available',
-      text: `Connected · available${heartbeat.latencyMs == null || heartbeat.latencyMs === 0 ? '' : ` · ${heartbeat.latencyMs} ms`}`,
-    };
+    return { status: 'available', text: 'Connected · available' };
   }
 
   function heartbeatGraph(playerId: string, unavailable: boolean): string {
     const samples = heartbeatSamples.get(playerId) ?? [];
     const visible = samples.slice(-12);
     const points = visible.map((sample, index) => {
-      const x = visible.length < 2 ? 41 : 4 + index * (74 / (visible.length - 1));
-      const y = sample < 0 ? 23 : 22 - Math.min(sample, 600) / 600 * 18;
+      const x = visible.length < 2 ? 55 : 5 + index * (100 / (visible.length - 1));
+      const y = sample < 0 ? 31 : 30 - Math.min(sample, 600) / 600 * 26;
       return `${x.toFixed(1)},${y.toFixed(1)}`;
     }).join(' ');
-    return `<svg class="heartbeat-monitor${unavailable ? ' is-unavailable' : ''}" viewBox="0 0 82 26" role="img" aria-label="Recent round-trip ping times"><polyline points="${points}"></polyline></svg>`;
+    return `<svg class="heartbeat-monitor${unavailable ? ' is-unavailable' : ''}" viewBox="0 0 110 44" role="img" aria-label="Recent round-trip ping times"><polyline points="${points}"></polyline><text x="5" y="41">−44s</text><text x="105" y="41" text-anchor="end">now</text></svg>`;
   }
 
   function pulsePlayerHeartbeat(playerId: string, unavailable: boolean): void {
@@ -1310,7 +1307,8 @@ export function createTiles(root: HTMLElement): void {
       const status = player.id === room.hostId ? 'Host' : '';
       const availability = heartbeatAvailability(player);
       const color = colorForPlayer(player, index);
-      return `<li style="--owner-color:${color}"><span class="presence ${player.connected === false ? 'is-offline' : ''}" aria-hidden="true"></span><span class="roster-player"><strong style="color:${color}">${escapeHtml(player.name)}</strong><small class="player-availability ${availability.status}">${escapeHtml(availability.text)}</small></span>${heartbeatGraph(player.id, availability.status === 'unavailable' || availability.status === 'disconnected')}${status ? `<em class="invite-state ${status.toLowerCase()}">${status}</em>` : ''}</li>`;
+      const graph = player.id === room.hostId ? '' : heartbeatGraph(player.id, availability.status === 'unavailable' || availability.status === 'disconnected');
+      return `<li style="--owner-color:${color}"><span class="presence ${player.connected === false ? 'is-offline' : ''}" aria-hidden="true"></span><span class="roster-player"><strong style="color:${color}">${escapeHtml(player.name)}</strong><small class="player-availability ${availability.status}">${escapeHtml(availability.text)}</small></span>${graph}${status ? `<em class="invite-state ${status.toLowerCase()}">${status}</em>` : ''}</li>`;
     });
     const inviteRows = connectionMode === 'nearby-host'
       ? [...nearbyInviteStates.values()]
@@ -1348,7 +1346,7 @@ export function createTiles(root: HTMLElement): void {
       && disconnected.some(player => player.id === room.hostId);
     message.textContent = hostDisconnected
       ? `${disconnected.find(player => player.id === room.hostId)?.name ?? 'Host'} disconnected — game paused while reconnecting.`
-      : `${disconnected.map(player => player.name).join(', ')} disconnected — they can rejoin from their home screen.`;
+      : `${disconnected.map(player => player.name).join(', ')} disconnected.`;
     playerDisconnect.append(message);
   }
 
@@ -1941,7 +1939,10 @@ export function createTiles(root: HTMLElement): void {
     peel.textContent = String(next.peel);
     dumps.textContent = String(next.dumps ?? 0);
     renderLobbyRoster(next);
-    players.innerHTML = next.players.map((player, index) => {
+    const orderedPlayers = next.players
+      .map((player, index) => ({ player, index }))
+      .sort((a, b) => Number(b.player.id === myId) - Number(a.player.id === myId));
+    players.innerHTML = orderedPlayers.map(({ player, index }) => {
       const heartbeat = heartbeatAvailability(player);
       const unavailable = heartbeat.status === 'unavailable' || heartbeat.status === 'disconnected';
       return `<li><button type="button" data-view-player="${escapeHtml(player.id)}" class="player-chip ${player.id === myId ? 'is-you' : ''} ${viewingPlayerId === player.id ? 'is-viewing' : ''} ${player.eliminated ? 'is-out' : ''} ${player.connected === false ? 'is-offline' : ''}" style="--owner-color:${colorForPlayer(player, index)}"><i class="${unavailable ? 'is-unavailable' : ''}"></i><span>${escapeHtml(player.name)}</span><b>${player.connected === false ? 'OFFLINE' : player.eliminated ? 'OUT' : `${player.tilesLeft} loose`}</b></button></li>`;
