@@ -84,7 +84,7 @@ export function createTiles(root: HTMLElement): void {
   const game = root.querySelector<HTMLElement>('[data-view="game"]')!;
   const nameForm = root.querySelector<HTMLFormElement>('[data-name-form]')!;
   const nameInput = root.querySelector<HTMLInputElement>('[data-name-input]')!;
-  const colorInputs = Array.from(root.querySelectorAll<HTMLInputElement>('[data-player-colors] input[name="player-color"]'));
+  const colorInputs = Array.from(root.querySelectorAll<HTMLInputElement>('[data-player-colors] input[type="radio"]'));
   const homeOptions = root.querySelector<HTMLElement>('[data-home-options]')!;
   const enterLobby = root.querySelector<HTMLButtonElement>('[data-enter-lobby]')!;
   const savedGames = root.querySelector<HTMLElement>('[data-saved-games]')!;
@@ -101,6 +101,9 @@ export function createTiles(root: HTMLElement): void {
   const share = root.querySelector<HTMLButtonElement>('[data-share]')!;
   const lobbyHelp = root.querySelector<HTMLElement>('.lobby-help')!;
   const lobbyTitle = root.querySelector<HTMLElement>('[data-lobby-title]')!;
+  const lobbyConnectionNotice = root.querySelector<HTMLElement>('[data-lobby-connection-notice]')!;
+  const lobbyConnectionMessage = root.querySelector<HTMLElement>('[data-lobby-connection-message]')!;
+  const lobbyRetryConnection = root.querySelector<HTMLButtonElement>('[data-lobby-retry-connection]')!;
   const chatLog = root.querySelector<HTMLElement>('[data-chat-log]')!;
   const chatForm = root.querySelector<HTMLFormElement>('[data-chat-form]')!;
   const chatInput = root.querySelector<HTMLInputElement>('[data-chat-input]')!;
@@ -170,6 +173,7 @@ export function createTiles(root: HTMLElement): void {
   let nearbyConnectingId: string | null = null;
   let nearbyReconnectAttempt = 0;
   let nearbyReconnectTimer: number | null = null;
+  let nearbyConnectionAttemptTimer: number | null = null;
   let nearbyHelloTimer: number | null = null;
   let nearbyHomeRefreshTimer: number | null = null;
   let nearbyHomeGeneration = 0;
@@ -514,6 +518,20 @@ export function createTiles(root: HTMLElement): void {
     return sanitizePlayerColor(colorInputs.find(input => input.checked)?.value);
   }
 
+  function selectPlayerColor(color: string): void {
+    const selected = sanitizePlayerColor(color);
+    colorInputs.forEach(input => { input.checked = input.value === selected; });
+  }
+
+  const nearbyWireName = (name = nearbyName): string =>
+    `tiles5|${selectedPlayerColor().slice(1)}|${sanitizeName(name)}`;
+
+  function decodeNearbyEndpoint<T extends NearbyEndpoint>(endpoint: T): T {
+    const match = /^tiles5\|([0-9a-f]{6})\|(.+)$/i.exec(endpoint.name);
+    if (!match) return endpoint;
+    return { ...endpoint, name: sanitizeName(match[2]), color: sanitizePlayerColor(`#${match[1].toLowerCase()}`) };
+  }
+
   function colorForPlayer(player: PlayerSummary | undefined, index = 0): string {
     return sanitizePlayerColor(player?.color ?? PLAYER_COLORS[index % PLAYER_COLORS.length]);
   }
@@ -608,7 +626,9 @@ export function createTiles(root: HTMLElement): void {
     diagnose('connection-restored', { connectionMode });
     root.dataset.connection = 'online';
     connectionNotice.hidden = true;
+    lobbyConnectionNotice.hidden = true;
     setButtonLoading(retryConnection, false);
+    setButtonLoading(lobbyRetryConnection, false);
     resumePendingChats();
   }
 
@@ -620,8 +640,12 @@ export function createTiles(root: HTMLElement): void {
     root.dataset.connection = 'offline';
     diagnose('connection-lost', { connectionMode, message });
     connectionMessage.textContent = message;
-    connectionNotice.hidden = false;
+    lobbyConnectionMessage.textContent = message;
+    const inLobby = !lobby.hidden;
+    connectionNotice.hidden = inLobby;
+    lobbyConnectionNotice.hidden = !inLobby;
     setButtonLoading(retryConnection, false);
+    setButtonLoading(lobbyRetryConnection, false);
   }
 
   async function loadDictionary(dictionary: DictionaryId): Promise<void> {
@@ -699,16 +723,20 @@ export function createTiles(root: HTMLElement): void {
       return;
     }
     if (message.t === 'heartbeat-status') {
-      playerHeartbeats.set(message.playerId, {
-        status: message.status, latencyMs: message.latencyMs, at: message.at,
-      });
-      if (message.status === 'available' || message.status === 'unavailable') {
-        const samples = heartbeatSamples.get(message.playerId) ?? [];
-        samples.push(message.status === 'available' ? (message.latencyMs ?? 0) : -1);
-        heartbeatSamples.set(message.playerId, samples.slice(-12));
+      for (const heartbeat of message.players) {
+        playerHeartbeats.set(heartbeat.playerId, {
+          status: heartbeat.status, latencyMs: heartbeat.latencyMs, at: heartbeat.at,
+        });
+        if (heartbeat.status === 'available' || heartbeat.status === 'unavailable') {
+          const samples = heartbeatSamples.get(heartbeat.playerId) ?? [];
+          samples.push(heartbeat.status === 'available' ? (heartbeat.latencyMs ?? 0) : -1);
+          heartbeatSamples.set(heartbeat.playerId, samples.slice(-12));
+        }
+        if (state?.phase !== 'lobby' && state) {
+          pulsePlayerHeartbeat(heartbeat.playerId, heartbeat.status === 'unavailable');
+        }
       }
       if (state?.phase === 'lobby') renderLobbyRoster(state);
-      else if (state) pulsePlayerHeartbeat(message.playerId, message.status === 'unavailable');
       return;
     }
     if (message.t === 'welcome') {
@@ -741,6 +769,7 @@ export function createTiles(root: HTMLElement): void {
       const row = document.createElement('div');
       row.className = `chat-message${message.playerId === myId ? ' is-you' : ''}`;
       row.dataset.messageId = messageId;
+      row.dataset.chatPlayer = message.playerId;
       const author = document.createElement('strong');
       author.textContent = message.playerId === myId ? 'You' : message.name;
       const chatPlayer = state?.players.find(player => player.id === message.playerId);
@@ -895,6 +924,11 @@ export function createTiles(root: HTMLElement): void {
     nearbyReconnectTimer = null;
   }
 
+  function clearNearbyConnectionAttemptTimer(): void {
+    if (nearbyConnectionAttemptTimer != null) window.clearTimeout(nearbyConnectionAttemptTimer);
+    nearbyConnectionAttemptTimer = null;
+  }
+
   function clearNearbyHelloTimer(): void {
     if (nearbyHelloTimer != null) window.clearTimeout(nearbyHelloTimer);
     nearbyHelloTimer = null;
@@ -933,7 +967,7 @@ export function createTiles(root: HTMLElement): void {
       renderNearbyEndpoints();
       await wait(350);
       if (!isCurrent()) return;
-      await NearbyConnections.startDiscovery({ name });
+      await NearbyConnections.startDiscovery({ name: nearbyWireName(name) });
       nearbyHomePhase = 'searching';
       nearbyStatus.textContent = '';
       renderNearbyEndpoints();
@@ -947,11 +981,11 @@ export function createTiles(root: HTMLElement): void {
     // chooses again if the first pairing did not produce an endpoint.
     const advertiseFirst = crypto.getRandomValues(new Uint8Array(1))[0] % 2 === 0;
     if (advertiseFirst) {
-      await NearbyConnections.startAdvertising({ name });
+      await NearbyConnections.startAdvertising({ name: nearbyWireName(name) });
       nearbyHomePhase = 'visible';
       nearbyStatus.textContent = 'Visible to nearby players · preparing search…';
     } else {
-      await NearbyConnections.startDiscovery({ name });
+      await NearbyConnections.startDiscovery({ name: nearbyWireName(name) });
       nearbyHomePhase = 'searching';
       nearbyStatus.textContent = '';
     }
@@ -960,10 +994,10 @@ export function createTiles(root: HTMLElement): void {
     await wait(5_500);
     if (!isCurrent()) return;
     if (advertiseFirst) {
-      await NearbyConnections.startDiscovery({ name });
+      await NearbyConnections.startDiscovery({ name: nearbyWireName(name) });
       nearbyHomePhase = 'searching';
       nearbyStatus.textContent = '';
-    } else await NearbyConnections.startAdvertising({ name });
+    } else await NearbyConnections.startAdvertising({ name: nearbyWireName(name) });
     renderNearbyEndpoints();
     if (isCurrent()) scheduleNearbyHomeRefresh();
   }
@@ -1126,6 +1160,7 @@ export function createTiles(root: HTMLElement): void {
       }
     }
     clearNearbyHelloTimer();
+    clearNearbyConnectionAttemptTimer();
     nearbyHostId = null;
     transportSend = null;
     nearbyAutoReconnect = true;
@@ -1172,13 +1207,16 @@ export function createTiles(root: HTMLElement): void {
     try {
       await NearbyConnections.setKeepAwake({ enabled: true });
       if (connectionMode === 'nearby-host') {
-        await NearbyConnections.startAdvertising({ name: nearbyName });
+        await NearbyConnections.stopAdvertising().catch(() => undefined);
+        await wait(250);
+        if (connectionMode !== 'nearby-host') return;
+        await NearbyConnections.startAdvertising({ name: nearbyWireName() });
         nearbyReconnectAttempt = 0;
         return;
       }
       if (nearbyHostId) return;
       await NearbyConnections.stopDiscovery();
-      await NearbyConnections.startDiscovery({ name: nearbyName });
+      await NearbyConnections.startDiscovery({ name: nearbyWireName() });
       nearbyAutoReconnect = true;
       clearNearbyReconnectTimer();
       nearbyReconnectTimer = window.setTimeout(() => {
@@ -1245,17 +1283,13 @@ export function createTiles(root: HTMLElement): void {
 
   function heartbeatGraph(playerId: string, unavailable: boolean): string {
     const samples = heartbeatSamples.get(playerId) ?? [];
-    const visible = [...Array(Math.max(0, 12 - samples.length)).fill(-1), ...samples.slice(-12)] as number[];
-    let path = 'M 0 18';
-    visible.forEach((sample, index) => {
-      const x = 5 + index * 6.7;
-      if (sample < 0) path += ` L ${x.toFixed(1)} 18`;
-      else {
-        const peak = Math.max(4, 10 - Math.min(sample, 300) / 50);
-        path += ` L ${(x - 2.4).toFixed(1)} 18 L ${(x - 1.2).toFixed(1)} ${peak.toFixed(1)} L ${x.toFixed(1)} 22 L ${(x + 1.7).toFixed(1)} 18`;
-      }
-    });
-    return `<svg class="heartbeat-monitor${unavailable ? ' is-unavailable' : ''}" viewBox="0 0 82 26" aria-label="Recent availability"><path d="${path}"></path></svg>`;
+    const visible = samples.slice(-12);
+    const points = visible.map((sample, index) => {
+      const x = visible.length < 2 ? 41 : 4 + index * (74 / (visible.length - 1));
+      const y = sample < 0 ? 23 : 22 - Math.min(sample, 600) / 600 * 18;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+    return `<svg class="heartbeat-monitor${unavailable ? ' is-unavailable' : ''}" viewBox="0 0 82 26" role="img" aria-label="Recent round-trip ping times"><polyline points="${points}"></polyline></svg>`;
   }
 
   function pulsePlayerHeartbeat(playerId: string, unavailable: boolean): void {
@@ -1272,10 +1306,11 @@ export function createTiles(root: HTMLElement): void {
 
   function renderLobbyRoster(room: RoomSnapshot): void {
     const playerNames = new Set(room.players.map(player => player.name.trim().toLocaleLowerCase()));
-    const playerRows = room.players.map(player => {
+    const playerRows = room.players.map((player, index) => {
       const status = player.id === room.hostId ? 'Host' : '';
       const availability = heartbeatAvailability(player);
-      return `<li><span class="presence ${player.connected === false ? 'is-offline' : ''}" aria-hidden="true"></span><span class="roster-player"><strong>${escapeHtml(player.name)}</strong><small class="player-availability ${availability.status}">${escapeHtml(availability.text)}</small></span>${heartbeatGraph(player.id, availability.status === 'unavailable' || availability.status === 'disconnected')}${status ? `<em class="invite-state ${status.toLowerCase()}">${status}</em>` : ''}</li>`;
+      const color = colorForPlayer(player, index);
+      return `<li style="--owner-color:${color}"><span class="presence ${player.connected === false ? 'is-offline' : ''}" aria-hidden="true"></span><span class="roster-player"><strong style="color:${color}">${escapeHtml(player.name)}</strong><small class="player-availability ${availability.status}">${escapeHtml(availability.text)}</small></span>${heartbeatGraph(player.id, availability.status === 'unavailable' || availability.status === 'disconnected')}${status ? `<em class="invite-state ${status.toLowerCase()}">${status}</em>` : ''}</li>`;
     });
     const inviteRows = connectionMode === 'nearby-host'
       ? [...nearbyInviteStates.values()]
@@ -1330,7 +1365,7 @@ export function createTiles(root: HTMLElement): void {
     try {
       await NearbyConnections.stopDiscovery().catch(() => undefined);
       await NearbyConnections.stopAdvertising().catch(() => undefined);
-      await NearbyConnections.requestConnection({ endpointId: endpoint.endpointId, name: nearbyName });
+      await NearbyConnections.requestConnection({ endpointId: endpoint.endpointId, name: nearbyWireName() });
       setNearbyPeerState(playerName, 'requested', 'Request queued · waiting for secure handshake');
     } catch (error) {
       outgoingNearbyInvites.delete(endpoint.endpointId);
@@ -1360,7 +1395,7 @@ export function createTiles(root: HTMLElement): void {
       renderPlayerDisconnect(state);
     }
     try {
-      await NearbyConnections.startDiscovery({ name: nearbyName });
+      await NearbyConnections.startDiscovery({ name: nearbyWireName() });
     } catch {
       pendingReinviteNames.delete(normalized);
       if (state) {
@@ -1393,6 +1428,7 @@ export function createTiles(root: HTMLElement): void {
       renderedNames.add(normalizedName);
       const label = document.createElement('label');
       label.className = 'nearby-player';
+      if (endpoint.color) label.style.setProperty('--player-color', endpoint.color);
       const checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
       checkbox.checked = selectedNearbyIds.has(endpoint.endpointId);
@@ -1524,6 +1560,7 @@ export function createTiles(root: HTMLElement): void {
     clearNearbyHomeRefreshTimer();
     connectionMode = 'nearby-join';
     clearNearbyReconnectTimer();
+    clearNearbyConnectionAttemptTimer();
     nearbyReconnectAttempt = 0;
     nearbyAutoReconnect = false;
     nearbyConnectingId = null;
@@ -1546,7 +1583,8 @@ export function createTiles(root: HTMLElement): void {
     nearbyPermissionAliases = 'permissionAliases' in availability ? availability.permissionAliases : undefined;
     nearbyEntry.hidden = false;
 
-    await NearbyConnections.addListener('endpointFound', endpoint => {
+    await NearbyConnections.addListener('endpointFound', rawEndpoint => {
+      const endpoint = decodeNearbyEndpoint(rawEndpoint);
       const lossTimer = nearbyEndpointLossTimers.get(endpoint.endpointId);
       if (lossTimer != null) window.clearTimeout(lossTimer);
       nearbyEndpointLossTimers.delete(endpoint.endpointId);
@@ -1571,22 +1609,35 @@ export function createTiles(root: HTMLElement): void {
       }
       if (connectionMode === 'nearby-join' && nearbyAutoReconnect && !nearbyHostId && !nearbyConnectingId
         && (!nearbyHostName || endpoint.name === nearbyHostName)) {
+        // The periodic discovery refresh must not interrupt a connection that
+        // has already found the saved host and started its handshake.
+        clearNearbyReconnectTimer();
         nearbyConnectingId = endpoint.endpointId;
         setNearbyPeerState(endpoint.name, 'requesting', 'Endpoint found · requesting Nearby reconnection');
         nearbyStatus.textContent = `Reconnecting to ${endpoint.name}…`;
+        clearNearbyConnectionAttemptTimer();
+        nearbyConnectionAttemptTimer = window.setTimeout(() => {
+          if (nearbyConnectingId !== endpoint.endpointId || nearbyHostId) return;
+          setNearbyPeerState(endpoint.name, 'failed', 'Connection timed out · restarting discovery');
+          nearbyConnectingId = null;
+          void NearbyConnections.disconnect({ endpointId: endpoint.endpointId }).catch(() => undefined);
+          scheduleNearbyTransport(0);
+        }, 12_000);
         void Promise.all([
           NearbyConnections.stopDiscovery().catch(() => undefined),
           NearbyConnections.stopAdvertising().catch(() => undefined),
-        ]).then(() => NearbyConnections.requestConnection({ endpointId: endpoint.endpointId, name: nearbyName }))
+        ]).then(() => NearbyConnections.requestConnection({ endpointId: endpoint.endpointId, name: nearbyWireName() }))
           .then(() => setNearbyPeerState(endpoint.name, 'requested', 'Reconnect queued · waiting for secure handshake'))
           .catch(error => {
+            clearNearbyConnectionAttemptTimer();
             setNearbyPeerState(endpoint.name, 'failed', `Reconnect failed · ${nearbyErrorDetail(error)}`);
             nearbyConnectingId = null;
             scheduleNearbyTransport();
           });
       }
     });
-    await NearbyConnections.addListener('endpointLost', endpoint => {
+    await NearbyConnections.addListener('endpointLost', rawEndpoint => {
+      const endpoint = decodeNearbyEndpoint(rawEndpoint);
       const connectionPending = outgoingNearbyInvites.has(endpoint.endpointId)
         || nearbyConnectingId === endpoint.endpointId;
       const previousTimer = nearbyEndpointLossTimers.get(endpoint.endpointId);
@@ -1610,7 +1661,8 @@ export function createTiles(root: HTMLElement): void {
       }, 12_000);
       nearbyEndpointLossTimers.set(endpoint.endpointId, timer);
     });
-    await NearbyConnections.addListener('verificationRequired', verification => {
+    await NearbyConnections.addListener('verificationRequired', rawVerification => {
+      const verification = decodeNearbyEndpoint(rawVerification);
       setNearbyPeerState(verification.name, 'authenticating', 'Secure Nearby handshake · authenticating devices');
       const returningPlayer = connectionMode === 'nearby-host'
         && state?.players.some(player => player.connected === false
@@ -1632,7 +1684,9 @@ export function createTiles(root: HTMLElement): void {
       if (connectionMode === 'nearby-home') showNearbyInvitation(verification);
       else void NearbyConnections.acceptVerification({ endpointId: verification.endpointId, accept: false });
     });
-    await NearbyConnections.addListener('connected', endpoint => {
+    await NearbyConnections.addListener('connected', rawEndpoint => {
+      const endpoint = decodeNearbyEndpoint(rawEndpoint);
+      clearNearbyConnectionAttemptTimer();
       clearNearbyChannel(endpoint.endpointId);
       connectionRestored();
       setNearbyPeerState(endpoint.name, 'transport', 'Nearby transport connected · waiting for app handshake');
@@ -1646,7 +1700,7 @@ export function createTiles(root: HTMLElement): void {
         }
         if (outgoingNearbyInvites.size === 0) {
           void NearbyConnections.stopDiscovery();
-          void NearbyConnections.startAdvertising({ name: nearbyName });
+          void NearbyConnections.startAdvertising({ name: nearbyWireName() });
         }
         nearbyReconnectAttempt = 0;
         nearbyStatus.textContent = `${endpoint.name} connected.`;
@@ -1670,7 +1724,11 @@ export function createTiles(root: HTMLElement): void {
       void NearbyConnections.stopDiscovery();
       enterNearbyGuest(endpoint);
     });
-    await NearbyConnections.addListener('disconnected', endpoint => {
+    await NearbyConnections.addListener('disconnected', rawEndpoint => {
+      const endpoint = decodeNearbyEndpoint(rawEndpoint);
+      if (nearbyConnectingId === endpoint.endpointId || nearbyHostId === endpoint.endpointId) {
+        clearNearbyConnectionAttemptTimer();
+      }
       clearNearbyChannel(endpoint.endpointId);
       setNearbyPeerState(endpoint.name, 'disconnected', 'Nearby transport disconnected · retry required');
       if (connectionMode === 'nearby-host' && localHost) {
@@ -1699,7 +1757,8 @@ export function createTiles(root: HTMLElement): void {
         scheduleNearbyTransport();
       }
     });
-    await NearbyConnections.addListener('payloadReceived', event => {
+    await NearbyConnections.addListener('payloadReceived', rawEvent => {
+      const event = decodeNearbyEndpoint(rawEvent);
       receiveNearbyPacket(event);
     });
     if (sanitizeName(nameInput.value)) void startNearbyHome();
@@ -1730,7 +1789,7 @@ export function createTiles(root: HTMLElement): void {
         await NearbyConnections.stopDiscovery().catch(() => undefined);
         await NearbyConnections.stopAdvertising().catch(() => undefined);
       } else {
-        await NearbyConnections.startAdvertising({ name });
+        await NearbyConnections.startAdvertising({ name: nearbyWireName(name) });
       }
       if (restored) {
         // Endpoint IDs are ephemeral. A saved player must be freshly discovered
@@ -1746,7 +1805,7 @@ export function createTiles(root: HTMLElement): void {
         nearbyInviteStates.clear();
         await wait(350);
         diagnose('nearby-resume-discovery-restart', { playerCount: restored.players.length });
-        await NearbyConnections.startDiscovery({ name });
+        await NearbyConnections.startDiscovery({ name: nearbyWireName(name) });
       }
       roomName = 'nearby';
       if (!restored) {
@@ -1777,7 +1836,7 @@ export function createTiles(root: HTMLElement): void {
       localHost.receive(localPeerId, { t: 'hello', v: PROTOCOL_VERSION, name, color: selectedPlayerColor(), resumeToken });
       for (const endpointId of inviteIds) {
         const endpointName = invitedEndpointNames.get(endpointId) ?? 'Nearby player';
-        void NearbyConnections.requestConnection({ endpointId, name })
+        void NearbyConnections.requestConnection({ endpointId, name: nearbyWireName(name) })
           .then(() => setNearbyPeerState(endpointName, 'requested', 'Request queued · waiting for secure handshake'))
           .catch(error => {
             nearbyInviteStates.delete(endpointId);
@@ -1863,6 +1922,17 @@ export function createTiles(root: HTMLElement): void {
     }
     state = next;
     state.dictionary = dictionary;
+    const currentPlayer = next.players.find(player => player.id === myId);
+    if (currentPlayer?.color) {
+      selectPlayerColor(currentPlayer.color);
+      localStorage.setItem('tiles-color', sanitizePlayerColor(currentPlayer.color));
+    }
+    for (const row of chatLog.querySelectorAll<HTMLElement>('[data-chat-player]')) {
+      const playerIndex = next.players.findIndex(player => player.id === row.dataset.chatPlayer);
+      if (playerIndex < 0) continue;
+      const author = row.querySelector<HTMLElement>('strong');
+      if (author) author.style.color = colorForPlayer(next.players[playerIndex], playerIndex);
+    }
     for (const player of next.players) {
       if (player.connected !== false) pendingReinviteNames.delete(player.name.trim().toLocaleLowerCase());
     }
@@ -3227,6 +3297,7 @@ export function createTiles(root: HTMLElement): void {
     connectionMode = null;
     stopOnlineTransport();
     clearNearbyReconnectTimer();
+    clearNearbyConnectionAttemptTimer();
     clearNearbyHelloTimer();
     clearNearbyHomeRefreshTimer();
     clearAllNearbyChannels();
@@ -3254,16 +3325,32 @@ export function createTiles(root: HTMLElement): void {
   }
   lobbyBack.addEventListener('click', () => {
     setButtonLoading(lobbyBack, true, 'Leaving…');
-    void leaveToHome(true);
+    void leaveToHome(false);
   });
   goHome.addEventListener('click', () => {
     setButtonLoading(goHome, true, 'Leaving…');
     void leaveToHome(false);
   });
-  retryConnection.addEventListener('click', async () => {
-    setButtonLoading(retryConnection, true, 'Retrying…');
+  (window as typeof window & { tilesHandleNativeBack?: () => boolean }).tilesHandleNativeBack = () => {
+    if (inviteDialog.open) {
+      inviteDialog.close();
+      return true;
+    }
+    if (gameMenu.open) {
+      gameMenu.close();
+      return true;
+    }
+    if (!lobby.hidden || !game.hidden) {
+      void leaveToHome(false);
+      return true;
+    }
+    return false;
+  };
+  async function retryCurrentConnection(button: HTMLButtonElement): Promise<void> {
+    setButtonLoading(button, true, 'Retrying…');
     if (connectionMode === 'online' && onlineName) {
       connectionMessage.textContent = 'Reconnecting…';
+      lobbyConnectionMessage.textContent = 'Reconnecting…';
       if (reconnectTimer != null) window.clearTimeout(reconnectTimer);
       reconnectTimer = null;
       connectOnline(onlineName);
@@ -3271,13 +3358,16 @@ export function createTiles(root: HTMLElement): void {
     }
     if (connectionMode === 'nearby-join') {
       connectionMessage.textContent = 'Reconnecting to the nearby host…';
+      lobbyConnectionMessage.textContent = 'Reconnecting to the nearby host…';
       nearbyAutoReconnect = true;
       nearbyConnectingId = null;
       clearNearbyReconnectTimer();
       await resumeNearbyTransport();
-      retryConnection.disabled = false;
+      button.disabled = false;
     }
-  });
+  }
+  retryConnection.addEventListener('click', () => { void retryCurrentConnection(retryConnection); });
+  lobbyRetryConnection.addEventListener('click', () => { void retryCurrentConnection(lobbyRetryConnection); });
   window.addEventListener('resize', () => {
     applyCamera();
     updatePlayerScrollFades();
@@ -3312,10 +3402,22 @@ export function createTiles(root: HTMLElement): void {
       void resumeNearbyTransport();
     }
   });
-  const savedPlayerColor = sanitizePlayerColor(localStorage.getItem('tiles-color'));
-  colorInputs.forEach(input => { input.checked = input.value === savedPlayerColor; });
+  const storedPlayerColor = localStorage.getItem('tiles-color');
+  const initialPlayerColor = storedPlayerColor && (PLAYER_COLORS as readonly string[]).includes(storedPlayerColor)
+    ? storedPlayerColor
+    : PLAYER_COLORS[crypto.getRandomValues(new Uint8Array(1))[0] % PLAYER_COLORS.length];
+  localStorage.setItem('tiles-color', initialPlayerColor);
+  selectPlayerColor(initialPlayerColor);
   colorInputs.forEach(input => input.addEventListener('change', () => {
-    if (input.checked) localStorage.setItem('tiles-color', sanitizePlayerColor(input.value));
+    if (!input.checked) return;
+    const color = sanitizePlayerColor(input.value);
+    selectPlayerColor(color);
+    localStorage.setItem('tiles-color', color);
+    if (state?.phase === 'lobby') send({ t: 'color', color });
+    else if (connectionMode === 'nearby-home') {
+      clearNearbyHomeRefreshTimer();
+      void NearbyConnections.stop().then(() => startNearbyHome()).catch(() => undefined);
+    }
   }));
   initializeUpdates();
   void initializeNearby();

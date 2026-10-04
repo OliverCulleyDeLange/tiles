@@ -126,6 +126,7 @@ export class TilesRoom extends DurableObject<Env> {
 
     if (message.t === 'hello') await this.hello(ws, session, message);
     else if (!session.joined) return;
+    else if (message.t === 'color') await this.setColor(session, message.color);
     else if (message.t === 'dictionary') await this.setDictionary(session, message.dictionary);
     else if (message.t === 'chat') await this.chat(session, message.id, message.text);
     else if (message.t === 'chat-receipt') await this.chatReceipt(session, message);
@@ -208,6 +209,16 @@ export class TilesRoom extends DurableObject<Env> {
     const game = await this.load();
     if (game.phase !== 'lobby' || session.id !== game.hostId || game.players.length < 2) return;
     await this.deal(game, false);
+  }
+
+  private async setColor(session: Session, rawColor: string): Promise<void> {
+    const game = await this.load();
+    if (game.phase !== 'lobby') return;
+    const player = game.players.find(value => value.id === session.id);
+    if (!player) return;
+    player.color = sanitizePlayerColor(rawColor);
+    await this.save(game);
+    this.broadcastRoom(game);
   }
 
   private async chat(session: Session, rawId: string, raw: string): Promise<void> {

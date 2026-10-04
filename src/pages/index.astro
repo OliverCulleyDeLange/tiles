@@ -22,14 +22,14 @@
       </label>
       <fieldset class="player-colors" data-player-colors>
         <legend>Your colour</legend>
-        <label style="--player-color:#ff664d"><input type="radio" name="player-color" value="#ff664d" checked /><span>Coral</span></label>
-        <label style="--player-color:#2478d4"><input type="radio" name="player-color" value="#2478d4" /><span>Blue</span></label>
-        <label style="--player-color:#1b8b58"><input type="radio" name="player-color" value="#1b8b58" /><span>Green</span></label>
-        <label style="--player-color:#9a55cc"><input type="radio" name="player-color" value="#9a55cc" /><span>Purple</span></label>
-        <label style="--player-color:#e58b18"><input type="radio" name="player-color" value="#e58b18" /><span>Orange</span></label>
-        <label style="--player-color:#d14486"><input type="radio" name="player-color" value="#d14486" /><span>Pink</span></label>
-        <label style="--player-color:#008b95"><input type="radio" name="player-color" value="#008b95" /><span>Teal</span></label>
-        <label style="--player-color:#735c3b"><input type="radio" name="player-color" value="#735c3b" /><span>Brown</span></label>
+        <label style="--player-color:#ff664d"><input type="radio" name="player-color-home" value="#ff664d" /><span>Coral</span></label>
+        <label style="--player-color:#2478d4"><input type="radio" name="player-color-home" value="#2478d4" /><span>Blue</span></label>
+        <label style="--player-color:#1b8b58"><input type="radio" name="player-color-home" value="#1b8b58" /><span>Green</span></label>
+        <label style="--player-color:#9a55cc"><input type="radio" name="player-color-home" value="#9a55cc" /><span>Purple</span></label>
+        <label style="--player-color:#e58b18"><input type="radio" name="player-color-home" value="#e58b18" /><span>Orange</span></label>
+        <label style="--player-color:#d14486"><input type="radio" name="player-color-home" value="#d14486" /><span>Pink</span></label>
+        <label style="--player-color:#008b95"><input type="radio" name="player-color-home" value="#008b95" /><span>Teal</span></label>
+        <label style="--player-color:#735c3b"><input type="radio" name="player-color-home" value="#735c3b" /><span>Brown</span></label>
       </fieldset>
       <div class="home-options" data-home-options>
         <form id="online-game-form" class="play-option online-option" data-name-form>
@@ -64,6 +64,21 @@
           <h1 data-lobby-title>Local room</h1>
         </div>
       </header>
+      <div class="lobby-connection-notice" data-lobby-connection-notice role="alert" hidden>
+        <span data-lobby-connection-message>Connection lost.</span>
+        <button type="button" data-lobby-retry-connection>Retry now</button>
+      </div>
+      <fieldset class="player-colors lobby-player-colors" data-player-colors>
+        <legend>Your colour</legend>
+        <label style="--player-color:#ff664d"><input type="radio" name="player-color-lobby" value="#ff664d" /><span>Coral</span></label>
+        <label style="--player-color:#2478d4"><input type="radio" name="player-color-lobby" value="#2478d4" /><span>Blue</span></label>
+        <label style="--player-color:#1b8b58"><input type="radio" name="player-color-lobby" value="#1b8b58" /><span>Green</span></label>
+        <label style="--player-color:#9a55cc"><input type="radio" name="player-color-lobby" value="#9a55cc" /><span>Purple</span></label>
+        <label style="--player-color:#e58b18"><input type="radio" name="player-color-lobby" value="#e58b18" /><span>Orange</span></label>
+        <label style="--player-color:#d14486"><input type="radio" name="player-color-lobby" value="#d14486" /><span>Pink</span></label>
+        <label style="--player-color:#008b95"><input type="radio" name="player-color-lobby" value="#008b95" /><span>Teal</span></label>
+        <label style="--player-color:#735c3b"><input type="radio" name="player-color-lobby" value="#735c3b" /><span>Brown</span></label>
+      </fieldset>
       <ol class="roster" data-roster></ol>
       <section class="lobby-chat" aria-label="Lobby chat">
         <div class="chat-heading"><strong>Lobby chat</strong><span>Visible to everyone here</span></div>
@@ -250,7 +265,7 @@
   .nearby-endpoints { display: flex; flex-wrap: wrap; gap: .5rem; }
   .nearby-player { display: inline-flex; width: fit-content; max-width: 100%; align-items: center; gap: .55rem; min-height: 2.8rem; padding: .65rem .75rem; border: 2px solid var(--tr-ink); border-radius: 9px; background: #fff; box-shadow: 2px 2px 0 var(--tr-ink); font-weight: 800; cursor: pointer; }
   .nearby-player:has(input:checked) { background: #fff6bf; }
-  .nearby-player input { width: 1.25rem; height: 1.25rem; flex: 0 0 auto; margin: 0; accent-color: #19734b; }
+  .nearby-player input { width: 1.25rem; height: 1.25rem; flex: 0 0 auto; margin: 0 .2rem 0 0; accent-color: var(--player-color, #19734b); }
   .nearby-player span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .nearby-search { display: grid; width: 100%; justify-items: center; gap: .65rem; padding: 1rem 0 .35rem; color: #6b6044; }
   .nearby-search span { display: grid; place-items: center; width: 3rem; aspect-ratio: 1; border: 2px solid var(--tr-ink); border-radius: 7px; background: var(--tr-yellow); color: var(--tr-ink); box-shadow: 3px 3px 0 var(--tr-ink); font: 900 1.6rem/1 Georgia, serif; animation: nearby-tile-spin 1.4s steps(4, end) infinite; }
@@ -261,6 +276,10 @@
   .lobby-card header { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: .8rem; }
   .lobby-card header > div { min-width: 0; }
   .lobby-card h1 { font-size: clamp(2.3rem, 7vw, 4rem); }
+  .lobby-player-colors { margin: .85rem 0 1rem; }
+  .lobby-connection-notice { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin: .75rem 0 1rem; padding: .7rem .75rem; border: 2px solid var(--tr-ink); border-radius: 10px; background: #ffb0a3; font-size: .86rem; font-weight: 900; }
+  .lobby-connection-notice[hidden] { display: none; }
+  .lobby-connection-notice button { flex: 0 0 auto; min-height: 2.35rem; padding: .5rem .7rem; border: 2px solid var(--tr-ink); border-radius: 8px; background: #fffdf3; color: var(--tr-ink); font-weight: 800; }
   .lobby-back { min-height: 2.2rem; margin-top: .05rem; padding: .35rem .6rem; border: 2px solid var(--tr-ink); border-radius: 999px; background: #fff; color: var(--tr-ink); font: 800 .78rem/1 inherit; cursor: pointer; }
   .roster { list-style: none; padding: 0; margin: 2rem 0; display: grid; gap: .55rem; }
   .roster li { display: flex; align-items: center; gap: .7rem; padding: .8rem; background: #fff; border: 2px solid var(--tr-ink); border-radius: 10px; }
@@ -272,8 +291,8 @@
   .player-availability.checking { color: #765b00; }
   .player-availability.unavailable, .player-availability.disconnected { color: #a43124; }
   .heartbeat-monitor { width: 82px; height: 28px; flex: 0 0 auto; border: 1.5px solid #28442f; border-radius: 5px; background: #102017; }
-  .heartbeat-monitor path { fill: none; stroke: #57ef85; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-  .heartbeat-monitor.is-unavailable path { stroke: #ff7b68; }
+  .heartbeat-monitor polyline { fill: none; stroke: #57ef85; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .heartbeat-monitor.is-unavailable polyline { stroke: #ff7b68; }
   .transport-detail { color: #6b6044; font-size: .68rem; font-weight: 700; line-height: 1.25; }
   .transport-detail.searching,
   .transport-detail.requesting,

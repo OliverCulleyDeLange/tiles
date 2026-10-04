@@ -87,6 +87,7 @@ export interface RoomSnapshot {
 
 export type ClientMessage =
   | { t: 'hello'; v: number; name: string; color?: string; resumeToken?: string }
+  | { t: 'color'; color: string }
   | { t: 'chat'; id: string; text: string }
   | { t: 'chat-receipt'; messageId: string; senderId: string; status: 'received' | 'read' }
   | { t: 'dictionary'; dictionary: DictionaryId }
@@ -116,7 +117,7 @@ export type ServerMessage =
   | { t: 'chat-receipt'; messageId: string; playerId: string; status: 'received' | 'read' }
   | { t: 'toast'; text: string; tone?: 'good' | 'bad' | 'plain' }
   | { t: 'heartbeat'; id: string; sentAt: number }
-  | { t: 'heartbeat-status'; playerId: string; status: 'checking' | 'available' | 'unavailable'; latencyMs?: number; at: number }
+  | { t: 'heartbeat-status'; players: Array<{ playerId: string; status: 'checking' | 'available' | 'unavailable'; latencyMs?: number; at: number }> }
   | { t: 'error'; message: string }
   | { t: 'pong' };
 

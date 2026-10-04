@@ -68,7 +68,11 @@ export class LocalRoomHost {
   private reviewEndsAt?: number;
   private rottenCalled = false;
   private heartbeatPending = new Map<string, { id: string; sentAt: number }>();
-  private heartbeatStatus = new Map<string, 'checking' | 'available' | 'unavailable'>();
+  private heartbeatStatus = new Map<string, {
+    status: 'checking' | 'available' | 'unavailable';
+    latencyMs?: number;
+    at: number;
+  }>();
 
   constructor(
     private readonly deliver: (peerId: string, message: ServerMessage) => void,
@@ -99,7 +103,8 @@ export class LocalRoomHost {
     }
     const player = this.players.find(value => value.id === peerId);
     if (!player) return;
-    if (message.t === 'dictionary') this.setDictionary(peerId, message.dictionary);
+    if (message.t === 'color') this.setColor(player, message.color);
+    else if (message.t === 'dictionary') this.setDictionary(peerId, message.dictionary);
     else if (message.t === 'chat') this.chat(player, message.id, message.text);
     else if (message.t === 'chat-receipt') this.chatReceipt(player, message);
     else if (message.t === 'start') this.start(peerId);
@@ -113,38 +118,46 @@ export class LocalRoomHost {
     if (message.t !== 'ping' && message.t !== 'chat' && message.t !== 'heartbeat-ack') this.changed();
   }
 
+  private setColor(player: LocalPlayer, rawColor: string): void {
+    if (this.phase !== 'lobby') return;
+    player.color = sanitizePlayerColor(rawColor);
+    this.broadcastRoom();
+  }
+
   heartbeat(): void {
     const now = Date.now();
     const host = this.players.find(player => player.id === this.hostId && player.connected);
-    if (host) this.broadcast({ t: 'heartbeat-status', playerId: host.id, status: 'available', latencyMs: 0, at: now });
+    if (host) this.heartbeatStatus.set(host.id, { status: 'available', latencyMs: 0, at: now });
     for (const player of this.players) {
       if (!player.connected || player.id === this.hostId) continue;
       const pending = this.heartbeatPending.get(player.id);
       if (pending && now - pending.sentAt < 7_000) continue;
       if (pending) {
         this.heartbeatPending.delete(player.id);
-        this.heartbeatStatus.set(player.id, 'unavailable');
-        this.broadcast({ t: 'heartbeat-status', playerId: player.id, status: 'unavailable', at: now });
+        this.heartbeatStatus.set(player.id, { status: 'unavailable', at: now });
       }
       const id = crypto.randomUUID();
       this.heartbeatPending.set(player.id, { id, sentAt: now });
       if (!this.heartbeatStatus.has(player.id)) {
-        this.heartbeatStatus.set(player.id, 'checking');
-        this.broadcast({ t: 'heartbeat-status', playerId: player.id, status: 'checking', at: now });
+        this.heartbeatStatus.set(player.id, { status: 'checking', at: now });
       }
       this.deliver(player.id, { t: 'heartbeat', id, sentAt: now });
     }
+    const players = this.players.map(player => {
+      const heartbeat = this.heartbeatStatus.get(player.id)
+        ?? { status: player.connected ? 'checking' as const : 'unavailable' as const, at: now };
+      return { playerId: player.id, ...heartbeat };
+    });
+    this.broadcast({ t: 'heartbeat-status', players });
   }
 
   private heartbeatAck(player: LocalPlayer, id: string, sentAt: number): void {
     const pending = this.heartbeatPending.get(player.id);
     if (!pending || pending.id !== id || pending.sentAt !== sentAt) return;
     this.heartbeatPending.delete(player.id);
-    this.heartbeatStatus.set(player.id, 'available');
     const now = Date.now();
-    this.broadcast({
-      t: 'heartbeat-status', playerId: player.id, status: 'available',
-      latencyMs: Math.max(0, Math.min(9_999, now - sentAt)), at: now,
+    this.heartbeatStatus.set(player.id, {
+      status: 'available', latencyMs: Math.max(0, Math.min(9_999, now - sentAt)), at: now,
     });
   }
 
@@ -153,8 +166,7 @@ export class LocalRoomHost {
     if (index < 0) return;
     this.players[index].connected = false;
     this.heartbeatPending.delete(peerId);
-    this.heartbeatStatus.set(peerId, 'unavailable');
-    this.broadcast({ t: 'heartbeat-status', playerId: peerId, status: 'unavailable', at: Date.now() });
+    this.heartbeatStatus.set(peerId, { status: 'unavailable', at: Date.now() });
     this.broadcastRoom();
     this.changed();
   }
@@ -189,7 +201,7 @@ export class LocalRoomHost {
     if (existingPeer) {
       existingPeer.connected = true;
       existingPeer.color = color;
-      this.heartbeatStatus.set(peerId, 'checking');
+      this.heartbeatStatus.set(peerId, { status: 'checking', at: Date.now() });
       this.deliver(peerId, { t: 'welcome', id: peerId, resumeToken: existingPeer.resumeToken, room: this.snapshot() });
       this.deliver(peerId, { t: 'hand', tiles: existingPeer.hand, replace: true });
       return;
@@ -207,7 +219,7 @@ export class LocalRoomHost {
       resuming.color = color;
       this.heartbeatPending.delete(previousId);
       this.heartbeatStatus.delete(previousId);
-      this.heartbeatStatus.set(peerId, 'checking');
+      this.heartbeatStatus.set(peerId, { status: 'checking', at: Date.now() });
       if (this.hostId === previousId) this.hostId = peerId;
       if (this.claimantId === previousId) this.claimantId = peerId;
       if (this.winnerId === previousId) this.winnerId = peerId;
@@ -225,7 +237,7 @@ export class LocalRoomHost {
     while (existing.has(unique.toLowerCase())) unique = `${name.slice(0, 15)} ${suffix++}`;
     const token = crypto.randomUUID();
     this.players.push({ id: peerId, name: unique, color, resumeToken: token, connected: true, hand: [], board: [], eliminated: false, voted: false });
-    this.heartbeatStatus.set(peerId, 'checking');
+    this.heartbeatStatus.set(peerId, { status: 'checking', at: Date.now() });
     if (!this.hostId) this.hostId = peerId;
     this.deliver(peerId, { t: 'welcome', id: peerId, resumeToken: token, room: this.snapshot() });
     this.broadcastRoom(peerId);

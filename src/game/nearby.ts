@@ -1,6 +1,6 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core';
 
-export interface NearbyEndpoint { endpointId: string; name: string }
+export interface NearbyEndpoint { endpointId: string; name: string; color?: string }
 export interface NearbyVerification extends NearbyEndpoint { code: string }
 export interface NearbyPayload extends NearbyEndpoint { payload: string }
 

@@ -177,6 +177,11 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
     private func endpoint(_ id: EndpointID) -> [String: Any] {
         ["endpointId": id, "name": endpointNames[id] ?? "Nearby player"]
     }
+
+    private func displayName(_ wireName: String) -> String {
+        let pieces = wireName.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false)
+        return pieces.count == 3 && pieces[0] == "tiles5" ? String(pieces[2]) : wireName
+    }
 }
 
 extension NearbyConnectionsPlugin: DiscovererDelegate {
@@ -194,7 +199,7 @@ extension NearbyConnectionsPlugin: AdvertiserDelegate {
         endpointNames[endpointID] = String(data: context, encoding: .utf8) ?? "Nearby player"
         let content = UNMutableNotificationContent()
         content.title = "Tiles game invitation"
-        content.body = "\(endpointNames[endpointID] ?? "A nearby player") invited you to play"
+        content.body = "\(displayName(endpointNames[endpointID] ?? "A nearby player")) invited you to play"
         content.sound = .default
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "invite-\(endpointID)", content: content, trigger: nil))
         connectionRequestHandler(true)

@@ -263,10 +263,17 @@ public class NearbyConnectionsPlugin extends Plugin {
             : new android.app.Notification.Builder(getContext());
         builder.setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle("Tiles game invitation")
-            .setContentText(name + " invited you to play")
+            .setContentText(displayName(name) + " invited you to play")
             .setContentIntent(pending)
             .setAutoCancel(true);
         notifications.notify(id.hashCode(), builder.build());
+    }
+
+    private String displayName(String wireName) {
+        if (wireName != null && wireName.matches("^tiles5\\|[0-9a-fA-F]{6}\\|.+$")) {
+            return wireName.substring(wireName.indexOf('|', 7) + 1);
+        }
+        return wireName == null ? "A nearby player" : wireName;
     }
 
     private final EndpointDiscoveryCallback discovery = new EndpointDiscoveryCallback() {
