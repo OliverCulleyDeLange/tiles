@@ -22,6 +22,7 @@ interface LocalPlayer {
   name: string;
   color?: string;
   resumeToken: string;
+  deviceId?: string;
   connected: boolean;
   hand: Tile[];
   board: PlacedTile[];
@@ -97,7 +98,7 @@ export class LocalRoomHost {
 
   receive(peerId: string, message: ClientMessage): void {
     if (message.t === 'hello') {
-      this.join(peerId, message.name, message.color, message.resumeToken);
+      this.join(peerId, message.name, message.color, message.resumeToken, message.deviceId);
       this.changed();
       return;
     }
@@ -195,8 +196,11 @@ export class LocalRoomHost {
     this.onChange?.(this.exportState());
   }
 
-  private join(peerId: string, rawName: string, rawColor?: string, resumeToken?: string): void {
+  private join(peerId: string, rawName: string, rawColor?: string, resumeToken?: string, rawDeviceId?: string): void {
     const color = sanitizePlayerColor(rawColor);
+    const deviceId = typeof rawDeviceId === 'string' && /^[a-f0-9]{8}$/.test(rawDeviceId)
+      ? rawDeviceId
+      : undefined;
     const existingPeer = this.players.find(player => player.id === peerId);
     if (existingPeer) {
       existingPeer.connected = true;
@@ -209,14 +213,16 @@ export class LocalRoomHost {
     const name = sanitizeName(rawName);
     if (!name) return this.deliver(peerId, { t: 'error', message: 'Enter a player name.' });
     const resuming = (resumeToken
-      ? this.players.find(player => player.resumeToken === resumeToken && !player.connected)
+      ? this.players.find(player => player.resumeToken === resumeToken)
       : undefined)
+      ?? (deviceId ? this.players.find(player => player.deviceId === deviceId) : undefined)
       ?? this.players.find(player => !player.connected && player.name.toLocaleLowerCase() === name.toLocaleLowerCase());
     if (resuming) {
       const previousId = resuming.id;
       resuming.id = peerId;
       resuming.connected = true;
       resuming.color = color;
+      if (deviceId) resuming.deviceId = deviceId;
       this.heartbeatPending.delete(previousId);
       this.heartbeatStatus.delete(previousId);
       this.heartbeatStatus.set(peerId, { status: 'checking', at: Date.now() });
@@ -236,7 +242,7 @@ export class LocalRoomHost {
     let suffix = 2;
     while (existing.has(unique.toLowerCase())) unique = `${name.slice(0, 15)} ${suffix++}`;
     const token = crypto.randomUUID();
-    this.players.push({ id: peerId, name: unique, color, resumeToken: token, connected: true, hand: [], board: [], eliminated: false, voted: false });
+    this.players.push({ id: peerId, name: unique, color, resumeToken: token, deviceId, connected: true, hand: [], board: [], eliminated: false, voted: false });
     this.heartbeatStatus.set(peerId, { status: 'checking', at: Date.now() });
     if (!this.hostId) this.hostId = peerId;
     this.deliver(peerId, { t: 'welcome', id: peerId, resumeToken: token, room: this.snapshot() });

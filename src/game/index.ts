@@ -960,6 +960,7 @@ export function createTiles(root: HTMLElement): void {
 
   const nearbyEndpointMap = new Map<string, NearbyEndpoint>();
   const nearbyEndpointLossTimers = new Map<string, number>();
+  const nearbyDisconnectGraceTimers = new Map<string, number>();
   const localPeerId = `local-${crypto.randomUUID().slice(0, 8)}`;
 
   function clearNearbyReconnectTimer(): void {
@@ -1079,6 +1080,12 @@ export function createTiles(root: HTMLElement): void {
     nearbySendSequences.clear();
     nearbyReceiveSequences.clear();
     nearbyReceiveBuffers.clear();
+    for (const timer of nearbyDisconnectGraceTimers.values()) window.clearTimeout(timer);
+    nearbyDisconnectGraceTimers.clear();
+  }
+
+  function nearbyDeviceKey(endpoint: NearbyEndpoint): string {
+    return endpoint.deviceId ?? endpoint.name.trim().toLocaleLowerCase();
   }
 
   function updateNearbyChannelProgress(endpointId: string): void {
@@ -1232,7 +1239,9 @@ export function createTiles(root: HTMLElement): void {
     if (connectionMode !== 'nearby-join' || !nearbyHostId || !nearbyAwaitingWelcome) return;
     if (nearbyHostName) setNearbyPeerState(nearbyHostName, 'syncing', 'Transport connected · sending app handshake');
     const resumeToken = localStorage.getItem(sessionKey()) ?? undefined;
-    sendNearby(nearbyHostId, { t: 'hello', v: PROTOCOL_VERSION, name: nearbyName, color: selectedPlayerColor(), resumeToken });
+    sendNearby(nearbyHostId, {
+      t: 'hello', v: PROTOCOL_VERSION, name: nearbyName, color: selectedPlayerColor(), resumeToken, deviceId: nearbyDeviceId,
+    });
     clearNearbyHelloTimer();
     nearbyHelloTimer = window.setTimeout(sendNearbyHello, 900);
   }
@@ -1680,7 +1689,7 @@ export function createTiles(root: HTMLElement): void {
     }
     const resumeToken = localStorage.getItem(sessionKey()) ?? undefined;
     localHost.receive(localPeerId, {
-      t: 'hello', v: PROTOCOL_VERSION, name: hostName, color: selectedPlayerColor(), resumeToken,
+      t: 'hello', v: PROTOCOL_VERSION, name: hostName, color: selectedPlayerColor(), resumeToken, deviceId: nearbyDeviceId,
     });
     show('Local lobby restored. Reconnecting players…', 'good');
   }
@@ -1811,6 +1820,10 @@ export function createTiles(root: HTMLElement): void {
     });
     await NearbyConnections.addListener('connected', rawEndpoint => {
       const endpoint = decodeNearbyEndpoint(rawEndpoint);
+      const deviceKey = nearbyDeviceKey(endpoint);
+      const disconnectTimer = nearbyDisconnectGraceTimers.get(deviceKey);
+      if (disconnectTimer != null) window.clearTimeout(disconnectTimer);
+      nearbyDisconnectGraceTimers.delete(deviceKey);
       clearNearbyConnectionAttemptTimer();
       clearNearbyChannel(endpoint.endpointId);
       connectionRestored();
@@ -1871,8 +1884,19 @@ export function createTiles(root: HTMLElement): void {
           if (outgoingNearbyInvites.size === 0) scheduleNearbyTransport(0);
           return;
         }
-        localHost.disconnect(endpoint.endpointId);
-        show(`${endpoint.name} disconnected. Waiting for them to rejoin…`, 'bad');
+        const deviceKey = nearbyDeviceKey(endpoint);
+        const previousTimer = nearbyDisconnectGraceTimers.get(deviceKey);
+        if (previousTimer != null) window.clearTimeout(previousTimer);
+        setNearbyPeerState(endpoint.name, 'searching', 'Nearby link interrupted · reconnecting automatically');
+        const timer = window.setTimeout(() => {
+          nearbyDisconnectGraceTimers.delete(deviceKey);
+          // Reconnection assigns a fresh endpoint ID. Only mark this player
+          // offline if the old endpoint still owns their room seat.
+          if (!state?.players.some(player => player.id === endpoint.endpointId && player.connected !== false)) return;
+          localHost?.disconnect(endpoint.endpointId);
+          show(`${endpoint.name} disconnected. Waiting for them to rejoin…`, 'bad');
+        }, 20_000);
+        nearbyDisconnectGraceTimers.set(deviceKey, timer);
         scheduleNearbyTransport(0);
       }
       else if (nearbyHostId === endpoint.endpointId) {
@@ -1964,7 +1988,9 @@ export function createTiles(root: HTMLElement): void {
         setNearbyPeerState(endpointName, 'requesting', 'Endpoint selected · requesting Nearby connection');
       }
       const resumeToken = restored ? localStorage.getItem(sessionKey()) ?? undefined : undefined;
-      localHost.receive(localPeerId, { t: 'hello', v: PROTOCOL_VERSION, name, color: selectedPlayerColor(), resumeToken });
+      localHost.receive(localPeerId, {
+        t: 'hello', v: PROTOCOL_VERSION, name, color: selectedPlayerColor(), resumeToken, deviceId: nearbyDeviceId,
+      });
       for (const [index, endpointId] of inviteIds.entries()) {
         const endpointName = invitedEndpointNames.get(endpointId) ?? 'Nearby player';
         try {

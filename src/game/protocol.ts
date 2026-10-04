@@ -86,7 +86,7 @@ export interface RoomSnapshot {
 }
 
 export type ClientMessage =
-  | { t: 'hello'; v: number; name: string; color?: string; resumeToken?: string }
+  | { t: 'hello'; v: number; name: string; color?: string; resumeToken?: string; deviceId?: string }
   | { t: 'color'; color: string }
   | { t: 'chat'; id: string; text: string }
   | { t: 'chat-receipt'; messageId: string; senderId: string; status: 'received' | 'read' }
