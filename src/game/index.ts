@@ -173,6 +173,7 @@ export function createTiles(root: HTMLElement): void {
   let nearbyHostName = '';
   let nearbyAutoReconnect = false;
   let nearbyConnectingId: string | null = null;
+  let nearbyReverseEndpoint: NearbyEndpoint | null = null;
   let nearbyReconnectAttempt = 0;
   let nearbyReconnectTimer: number | null = null;
   let nearbyHelloTimer: number | null = null;
@@ -1451,14 +1452,8 @@ export function createTiles(root: HTMLElement): void {
       renderPlayerDisconnect(state);
     }
     try {
-      if (!shouldRequestNearbyConnection(endpoint) && endpoint.deviceId) {
-        nearbyInvitationTargets.add(endpoint.deviceId);
-        await advertiseNearbyInvitations();
-        setNearbyPeerState(playerName, 'requested', 'Game request advertised · waiting for player response');
-        return;
-      }
       await NearbyConnections.stopDiscovery().catch(() => undefined);
-      await NearbyConnections.stopAdvertising().catch(() => undefined);
+      await advertiseNearbyInvitations();
       await NearbyConnections.requestConnection({ endpointId: endpoint.endpointId, name: nearbyWireName() });
       setNearbyPeerState(playerName, 'requested', 'Request queued · waiting for secure handshake');
     } catch (error) {
@@ -1585,23 +1580,28 @@ export function createTiles(root: HTMLElement): void {
     setButtonLoading(accept ? inviteAccept : inviteDecline, true, accept ? 'Joining…' : 'Declining…');
     try {
       if (accept) {
-        setNearbyPeerState(invitation.name, 'authenticating', 'Invite accepted · completing secure handshake');
+        setNearbyPeerState(invitation.name, 'authenticating', 'Invite accepted · opening game connection');
         connectionMode = 'nearby-join';
         nearbyHostName = invitation.name;
         nearbyConnectingId = invitation.endpointId;
+        nearbyReverseEndpoint = invitation;
         nearbyAutoReconnect = true;
         showNearbyLobbyLoading(invitation.name);
         // Home mode deliberately advertises and discovers at the same time.
-        // Quiesce both roles before accepting the verification so iOS does not
-        // tear down its advertiser while the first app handshake is in flight.
+        // Quiesce both roles before closing the knock and opening the durable
+        // connection, so the radios have one unambiguous job during handoff.
         await Promise.all([
           NearbyConnections.stopDiscovery(),
           NearbyConnections.stopAdvertising(),
         ]);
       }
-      await NearbyConnections.acceptVerification({ endpointId: invitation.endpointId, accept });
+      // This first connection is only the invitation knock. Close it in both
+      // cases; when accepted, its native disconnect event opens the durable
+      // game connection in the reverse direction.
+      await NearbyConnections.acceptVerification({ endpointId: invitation.endpointId, accept: false });
       if (!accept) {
         nearbyConnectingId = null;
+        nearbyReverseEndpoint = null;
         nearbyHostName = '';
       }
       nearbyStatus.textContent = accept ? `Joining ${invitation.name}'s game…` : `Declined ${invitation.name}'s game.`;
@@ -1609,6 +1609,7 @@ export function createTiles(root: HTMLElement): void {
       if (accept) {
         connectionMode = 'nearby-home';
         nearbyConnectingId = null;
+        nearbyReverseEndpoint = null;
         nearbyAutoReconnect = false;
         nameGate.hidden = false;
         lobby.hidden = true;
@@ -1882,6 +1883,7 @@ export function createTiles(root: HTMLElement): void {
     });
     await NearbyConnections.addListener('connected', async rawEndpoint => {
       const endpoint = decodeNearbyEndpoint(rawEndpoint);
+      if (nearbyReverseEndpoint?.endpointId === endpoint.endpointId) nearbyReverseEndpoint = null;
       clearNearbyChannel(endpoint.endpointId);
       connectionRestored();
       setNearbyPeerState(endpoint.name, 'transport', 'Nearby transport connected · waiting for app handshake');
@@ -1934,20 +1936,21 @@ export function createTiles(root: HTMLElement): void {
       setNearbyPeerState(endpoint.name, 'disconnected', 'Nearby transport disconnected · retry required');
       if (connectionMode === 'nearby-host' && localHost) {
         const pendingInvite = outgoingNearbyInvites.has(endpoint.endpointId);
-        nearbyEndpointMap.delete(endpoint.endpointId);
-        outgoingNearbyInvites.delete(endpoint.endpointId);
-        nearbyInviteStates.delete(endpoint.endpointId);
-        selectedNearbyIds.delete(endpoint.endpointId);
         if (pendingInvite) {
-          setNearbyPeerState(endpoint.name, 'failed', 'Nearby connection failed · invite can be retried');
+          // The initial connection only delivers the invitation. Its rejection
+          // is the expected handoff: the invited player now connects back to
+          // the host using the same advertised endpoint.
+          setNearbyPeerState(endpoint.name, 'requested', 'Invitation answered · waiting for player connection');
           if (state) {
             renderLobbyRoster(state);
             renderPlayerDisconnect(state);
           }
-          show(`${endpoint.name} could not be invited.`, 'bad');
-          if (outgoingNearbyInvites.size === 0) scheduleNearbyTransport(0);
           return;
         }
+        nearbyEndpointMap.delete(endpoint.endpointId);
+        outgoingNearbyInvites.delete(endpoint.endpointId);
+        nearbyInviteStates.delete(endpoint.endpointId);
+        selectedNearbyIds.delete(endpoint.endpointId);
         localHost.disconnect(endpoint.endpointId);
         setNearbyPeerState(endpoint.name, 'searching', 'Nearby link interrupted · reconnecting automatically');
         show(`${endpoint.name} disconnected. Reconnecting automatically…`, 'bad');
@@ -1956,6 +1959,21 @@ export function createTiles(root: HTMLElement): void {
       else if (nearbyHostId === endpoint.endpointId) {
         beginNearbyReconnect();
       } else if (nearbyConnectingId === endpoint.endpointId) {
+        const reverseEndpoint = nearbyReverseEndpoint;
+        if (reverseEndpoint?.endpointId === endpoint.endpointId) {
+          nearbyReverseEndpoint = null;
+          setNearbyPeerState(endpoint.name, 'requesting', 'Invite accepted · connecting to host');
+          void NearbyConnections.requestConnection({ endpointId: endpoint.endpointId, name: nearbyWireName() })
+            .then(() => setNearbyPeerState(endpoint.name, 'requested', 'Game connection requested · waiting for secure handshake'))
+            .catch(error => {
+              nearbyConnectingId = null;
+              nearbyAutoReconnect = true;
+              setNearbyPeerState(endpoint.name, 'failed', `Game connection failed · ${nearbyErrorDetail(error)}`);
+              showNearbyLobbyLoading(nearbyHostName || endpoint.name, 'Finding host again…');
+              scheduleNearbyTransport(0);
+            });
+          return;
+        }
         nearbyConnectingId = null;
         nearbyAutoReconnect = true;
         showNearbyLobbyLoading(nearbyHostName || endpoint.name, 'Connection interrupted · finding host again…');
@@ -2005,9 +2023,7 @@ export function createTiles(root: HTMLElement): void {
         await NearbyConnections.stopDiscovery().catch(() => undefined);
         await NearbyConnections.stopAdvertising().catch(() => undefined);
         await wait(300);
-        if (nearbyInvitationTargets.size) {
-          await NearbyConnections.startAdvertising({ name: nearbyWireName(name) });
-        }
+        await NearbyConnections.startAdvertising({ name: nearbyWireName(name) });
       } else {
         await NearbyConnections.startAdvertising({ name: nearbyWireName(name) });
       }
@@ -2053,13 +2069,7 @@ export function createTiles(root: HTMLElement): void {
           status: 'requested',
           deviceId: invitedEndpoints.get(endpointId)?.deviceId,
         });
-        setNearbyPeerState(
-          endpointName,
-          'requesting',
-          shouldRequestNearbyConnection(invitedEndpoints.get(endpointId) ?? { endpointId, name: endpointName })
-            ? 'Endpoint selected · requesting Nearby connection'
-            : 'Game request advertised · waiting for player response',
-        );
+        setNearbyPeerState(endpointName, 'requesting', 'Endpoint selected · sending game request');
       }
       const resumeToken = restored ? localStorage.getItem(sessionKey()) ?? undefined : undefined;
       localHost.receive(localPeerId, {
@@ -2075,9 +2085,7 @@ export function createTiles(root: HTMLElement): void {
         );
       }
       for (const [index, endpointId] of inviteIds.entries()) {
-        const endpoint = invitedEndpoints.get(endpointId);
         const endpointName = invitedEndpointNames.get(endpointId) ?? 'Nearby player';
-        if (endpoint && !shouldRequestNearbyConnection(endpoint)) continue;
         try {
           await NearbyConnections.requestConnection({ endpointId, name: nearbyWireName(name) });
           setNearbyPeerState(endpointName, 'requested', 'Request queued · waiting for secure handshake');
@@ -3569,6 +3577,7 @@ export function createTiles(root: HTMLElement): void {
     pendingReinviteNames.clear();
     nearbyHostId = null;
     nearbyHostName = '';
+    nearbyReverseEndpoint = null;
     nearbyAutoReconnect = false;
     nearbyConnectingId = null;
     state = null;
