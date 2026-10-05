@@ -78,15 +78,6 @@ const DICTIONARY_FILES: Record<DictionaryId, string> = {
   fr: dictionaryFile('fr'),
   pt: dictionaryFile('pt'),
 };
-const WIKTIONARY_LANGUAGES: Record<DictionaryId, string> = {
-  'scowl-us': 'en',
-  'scowl-gb': 'en',
-  de: 'de',
-  es: 'es',
-  it: 'it',
-  fr: 'fr',
-  pt: 'pt',
-};
 
 export function createTiles(root: HTMLElement): void {
   sessionStorage.removeItem('tiles-root-sw-recovery');
@@ -143,8 +134,8 @@ export function createTiles(root: HTMLElement): void {
   const resultsSubtitle = root.querySelector<HTMLElement>('[data-results-subtitle]')!;
   const resultsAwards = root.querySelector<HTMLElement>('[data-results-awards]')!;
   const resultsLeaderboard = root.querySelector<HTMLElement>('[data-results-leaderboard]')!;
+  const resultsHelp = root.querySelector<HTMLElement>('[data-results-help]')!;
   const resultsWords = root.querySelector<HTMLElement>('[data-results-words]')!;
-  const wordLookup = root.querySelector<HTMLAnchorElement>('[data-word-lookup]')!;
   const resultsHostNote = root.querySelector<HTMLElement>('[data-results-host-note]')!;
   const bunch = root.querySelector<HTMLElement>('[data-bunch]')!;
   const peel = root.querySelector<HTMLElement>('[data-peel]')!;
@@ -155,6 +146,7 @@ export function createTiles(root: HTMLElement): void {
   const flipWordButton = root.querySelector<HTMLButtonElement>('[data-flip-word]')!;
   const randomiseButton = root.querySelector<HTMLButtonElement>('[data-randomise]')!;
   const peelAnimation = root.querySelector<HTMLElement>('[data-peel-animation]')!;
+  const peelAnimationLabel = peelAnimation.querySelector<HTMLElement>('[data-peel-animation-label]')!;
   const undoButton = root.querySelector<HTMLButtonElement>('[data-undo]')!;
   const redoButton = root.querySelector<HTMLButtonElement>('[data-redo]')!;
   const toast = root.querySelector<HTMLElement>('[data-toast]')!;
@@ -261,6 +253,7 @@ export function createTiles(root: HTMLElement): void {
   let dictionaryWords = new Set<string>();
   let loadedDictionary: DictionaryId | null = null;
   let loadingDictionary: DictionaryId | null = null;
+  const playerPeelCounts = new Map<string, number>();
   let dragging: {
     id: string;
     dx: number;
@@ -2205,10 +2198,20 @@ export function createTiles(root: HTMLElement): void {
     await startNearbyHost(name, restored);
   }
 
+  function playPeelAnimation(playerName?: string): void {
+    peelAnimationLabel.textContent = playerName ? `${playerName} peeled` : 'PEEL!';
+    peelAnimation.classList.remove('is-playing');
+    void peelAnimation.offsetWidth;
+    peelAnimation.classList.add('is-playing');
+  }
+
   function updateRoom(next: RoomSnapshot): void {
     if (dragging && next.phase !== 'playing') cancelDrag();
     const previousPhase = state?.phase;
     const previousPeel = state?.peel;
+    const peeler = next.players.find(player =>
+      (player.stats?.peels ?? 0) > (playerPeelCounts.get(player.id) ?? 0));
+    next.players.forEach(player => playerPeelCounts.set(player.id, player.stats?.peels ?? 0));
     const dictionary = next.dictionary ?? 'scowl-gb';
     clearNearbyHelloTimer();
     if (connectionMode === 'nearby-join') {
@@ -2301,9 +2304,7 @@ export function createTiles(root: HTMLElement): void {
       resultsDialog.close();
     }
     if (previousPeel != null && next.peel > previousPeel) {
-      peelAnimation.classList.remove('is-playing');
-      void peelAnimation.offsetWidth;
-      peelAnimation.classList.add('is-playing');
+      playPeelAnimation(peeler?.name);
     }
     if (!dragging) renderTiles();
   }
@@ -2996,14 +2997,21 @@ export function createTiles(root: HTMLElement): void {
       return `<div class="result-player ${row.player.id === room.winnerId ? 'is-winner' : ''}" style="--player-color:${color}"><span class="result-player-rank">${row.player.id === room.winnerId ? '♛' : rank + 1}</span><span class="result-player-name">${escapeHtml(row.player.name)}${row.player.id === myId ? ' · You' : ''}</span><span class="result-player-stat"><b>${row.words.length}</b><small>Words</small></span><span class="result-player-stat"><b>${row.stats.dumps}</b><small>Dumps</small></span><span class="result-player-stat"><b>${row.stats.bestPeelStreak}×</b><small>Streak</small></span></div>`;
     }).join('');
 
+    const canLookUpWords = room.dictionary === 'scowl-us' || room.dictionary === 'scowl-gb';
+    resultsHelp.textContent = canLookUpWords
+      ? 'Tap a word to look it up on Dictionary.com.'
+      : 'Words accepted by the selected game dictionary.';
     resultsWords.innerHTML = rows.map(row => {
       const unique = [...new Set(row.words.map(word => word.text))]
         .sort((a, b) => b.length - a.length || a.localeCompare(b));
       if (!unique.length) return '';
-      return `<div class="result-word-group"><strong>${escapeHtml(row.player.name)}</strong><div class="result-word-list">${unique.map(word => `<button type="button" class="result-word" data-result-word="${escapeHtml(word)}">${escapeHtml(word)}</button>`).join('')}</div></div>`;
+      const wordLabels = unique.map(word => {
+        if (!canLookUpWords) return `<span class="result-word">${escapeHtml(word)}</span>`;
+        const href = `https://www.dictionary.com/browse/${encodeURIComponent(word.toLocaleLowerCase('en'))}`;
+        return `<a class="result-word" href="${href}" target="_blank" rel="noopener noreferrer" aria-label="Look up ${escapeHtml(word)} on Dictionary.com (opens in a new tab)">${escapeHtml(word)}</a>`;
+      }).join('');
+      return `<div class="result-word-group"><strong>${escapeHtml(row.player.name)}</strong><div class="result-word-list">${wordLabels}</div></div>`;
     }).join('') || '<p class="results-help">No completed words to show yet.</p>';
-    wordLookup.hidden = true;
-    wordLookup.removeAttribute('href');
 
     const isHost = myId === room.hostId;
     resultsRestart.disabled = !isHost || room.players.length < 2;
@@ -3686,17 +3694,6 @@ export function createTiles(root: HTMLElement): void {
   });
   resultsClose.addEventListener('click', () => resultsDialog.close());
   resultsBoard.addEventListener('click', () => resultsDialog.close());
-  resultsWords.addEventListener('click', event => {
-    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-result-word]');
-    const word = button?.dataset.resultWord;
-    if (!button || !word || !state) return;
-    resultsWords.querySelectorAll('.result-word.is-selected').forEach(element => element.classList.remove('is-selected'));
-    button.classList.add('is-selected');
-    const language = WIKTIONARY_LANGUAGES[state.dictionary];
-    wordLookup.href = `https://${language}.wiktionary.org/wiki/${encodeURIComponent(word.toLocaleLowerCase())}`;
-    wordLookup.textContent = `Look up “${word}” on Wiktionary ↗`;
-    wordLookup.hidden = false;
-  });
   bugReport.addEventListener('click', () => { void saveBugReport(); });
   const requestNewGame = (button: HTMLButtonElement): void => {
     if (!state || myId !== state.hostId || state.players.length < 2) return;
