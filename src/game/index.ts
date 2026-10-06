@@ -78,6 +78,7 @@ const DICTIONARY_FILES: Record<DictionaryId, string> = {
   fr: dictionaryFile('fr'),
   pt: dictionaryFile('pt'),
 };
+const PEEL_RETRY_MS = 1_500;
 
 export function createTiles(root: HTMLElement): void {
   sessionStorage.removeItem('tiles-root-sw-recovery');
@@ -249,6 +250,7 @@ export function createTiles(root: HTMLElement): void {
   let selectedId: string | null = null;
   const selectedIds = new Set<string>();
   let peelSent = -1;
+  let peelRetryTimer: number | null = null;
   let applyingRoomHand = false;
   let dictionaryWords = new Set<string>();
   let loadedDictionary: DictionaryId | null = null;
@@ -541,9 +543,20 @@ export function createTiles(root: HTMLElement): void {
     button.disabled = false;
   }
 
-  function send(message: object): void {
-    if (transportSend) transportSend(message);
-    else if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+  function send(message: object): boolean {
+    if (transportSend) {
+      transportSend(message);
+      return true;
+    }
+    if (socket?.readyState !== WebSocket.OPEN) return false;
+    socket.send(JSON.stringify(message));
+    return true;
+  }
+
+  function clearPeelRetry(): void {
+    if (peelRetryTimer == null) return;
+    window.clearTimeout(peelRetryTimer);
+    peelRetryTimer = null;
   }
 
   function selectedPlayerColor(): string {
@@ -755,6 +768,7 @@ export function createTiles(root: HTMLElement): void {
     rackOrder = [];
     selectedId = null;
     selectedIds.clear();
+    clearPeelRetry();
     peelSent = -1;
   }
 
@@ -900,6 +914,7 @@ export function createTiles(root: HTMLElement): void {
       applyHand(message.tiles, message.replace);
     } else if (message.t === 'peel-result') {
       diagnose('peel-result', message);
+      clearPeelRetry();
       if (!message.accepted) {
         peelSent = -1;
         if (message.reason) show(message.reason, 'bad');
@@ -2224,6 +2239,7 @@ export function createTiles(root: HTMLElement): void {
     }
     state = next;
     state.dictionary = dictionary;
+    if (next.phase !== 'playing' || (previousPeel != null && next.peel !== previousPeel)) clearPeelRetry();
     const currentPlayer = next.players.find(player => player.id === myId);
     if (currentPlayer?.color) {
       selectPlayerColor(currentPlayer.color);
@@ -2335,11 +2351,15 @@ export function createTiles(root: HTMLElement): void {
       const playerBoard = isMine ? boardPayload() : player.board;
       const positions = new Map(playerBoard.map(tile => [tile.id, tile]));
       const validity = wordValidity(playerBoard, area?.rotation ?? 0);
+      const allOwnTilesPlaced = isMine && sourceTiles.length === positions.size;
+      const allOwnWordsValid = allOwnTilesPlaced && validity.size === playerBoard.length
+        && [...validity.values()].every(status => status === 'valid');
+      const disconnected = allOwnWordsValid ? disconnectedTileIds(playerBoard) : new Set<string>();
       for (const source of sourceTiles) {
         const position = positions.get(source.id);
         if (!position) continue;
         const tile = { ...source, x: position.x, y: position.y } as LocalTile;
-        const element = makeTile(tile, player, color, isMine && canEditTiles(), area?.rotation ?? 0, validity.get(tile.id));
+        const element = makeTile(tile, player, color, isMine && canEditTiles(), area?.rotation ?? 0, validity.get(tile.id), disconnected.has(tile.id));
         positionTile(element, position.x, position.y);
         boardLayer.append(element);
       }
@@ -2404,6 +2424,7 @@ export function createTiles(root: HTMLElement): void {
     editable: boolean,
     rotation: number,
     validity?: 'valid' | 'partial' | 'invalid',
+    disconnected = false,
   ): HTMLElement {
     const element = document.createElement(editable ? 'button' : 'span');
     if (element instanceof HTMLButtonElement) element.type = 'button';
@@ -2417,6 +2438,8 @@ export function createTiles(root: HTMLElement): void {
     element.classList.toggle('is-valid-word', validity === 'valid');
     element.classList.toggle('is-partial-word', validity === 'partial');
     element.classList.toggle('is-invalid-word', validity === 'invalid');
+    element.classList.toggle('is-disconnected', disconnected);
+    if (disconnected) element.setAttribute('aria-label', `${element.getAttribute('aria-label')}, disconnected from the main grid`);
     if (editable) element.addEventListener('pointerdown', event => beginDrag(event as PointerEvent, tile));
     return element;
   }
@@ -3061,27 +3084,53 @@ export function createTiles(root: HTMLElement): void {
 
   function connected(values: PlacedTile[]): boolean {
     if (values.length < 2) return false;
-    const cells = new Set(values.map(tile => `${tile.x},${tile.y}`));
-    const reached = new Set<string>();
-    const queue = [cells.values().next().value as string];
-    while (queue.length) {
-      const cell = queue.pop()!;
-      if (reached.has(cell)) continue;
-      reached.add(cell);
-      const [x, y] = cell.split(',').map(Number);
-      for (const next of [`${x + 1},${y}`, `${x - 1},${y}`, `${x},${y + 1}`, `${x},${y - 1}`]) {
-        if (cells.has(next) && !reached.has(next)) queue.push(next);
+    return disconnectedTileIds(values).size === 0;
+  }
+
+  function disconnectedTileIds(values: PlacedTile[]): Set<string> {
+    const byCell = new Map(values.map(tile => [`${tile.x},${tile.y}`, tile]));
+    const remaining = new Set(byCell.keys());
+    const components: string[][] = [];
+    while (remaining.size) {
+      const first = remaining.values().next().value as string;
+      const queue = [first];
+      const ids: string[] = [];
+      remaining.delete(first);
+      while (queue.length) {
+        const cell = queue.pop()!;
+        const tile = byCell.get(cell);
+        if (tile) ids.push(tile.id);
+        const [x, y] = cell.split(',').map(Number);
+        for (const next of [`${x + 1},${y}`, `${x - 1},${y}`, `${x},${y + 1}`, `${x},${y - 1}`]) {
+          if (!remaining.delete(next)) continue;
+          queue.push(next);
+        }
       }
+      components.push(ids);
     }
-    return reached.size === values.length;
+    if (components.length < 2) return new Set();
+    const main = components.reduce((largest, component) => component.length > largest.length ? component : largest);
+    const mainIds = new Set(main);
+    return new Set(values.filter(tile => !mainIds.has(tile.id)).map(tile => tile.id));
   }
 
   function maybePeel(): void {
     if (applyingRoomHand || !state || state.phase !== 'playing' || tiles.length === 0 || tiles.some(tile => tile.x == null)) return;
     const payload = boardPayload();
-    if (!connected(payload) || !allWordsValid(payload) || peelSent === state.peel) return;
-    peelSent = state.peel;
-    send({ t: 'peel', peel: state.peel, board: payload });
+    const wordsValid = allWordsValid(payload);
+    if (!connected(payload)) return;
+    if (!wordsValid || peelSent === state.peel) return;
+    const requestedPeel = state.peel;
+    if (!send({ t: 'peel', peel: requestedPeel, board: payload })) return;
+    peelSent = requestedPeel;
+    clearPeelRetry();
+    peelRetryTimer = window.setTimeout(() => {
+      peelRetryTimer = null;
+      if (!state || state.phase !== 'playing' || state.peel !== requestedPeel || peelSent !== requestedPeel) return;
+      diagnose('peel-retry', { peel: requestedPeel });
+      peelSent = -1;
+      maybePeel();
+    }, PEEL_RETRY_MS);
   }
 
   function applyCamera(animate = false): void {
