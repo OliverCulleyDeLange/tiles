@@ -64,11 +64,6 @@ public class NearbyConnectionsPlugin extends Plugin {
         notifications.cancelAll();
     }
 
-    @Override
-    protected void handleOnStop() {
-        stopNearbySession();
-    }
-
     @PluginMethod
     public void isAvailable(PluginCall call) {
         JSObject result = new JSObject();

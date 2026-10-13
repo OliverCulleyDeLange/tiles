@@ -42,16 +42,6 @@ public class NearbyConnectionsPlugin: CAPPlugin, CAPBridgedPlugin {
     public override func load() {
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
         UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(appDidEnterBackground),
-            name: UIScene.didEnterBackgroundNotification,
-            object: nil
-        )
-    }
-
-    @objc private func appDidEnterBackground() {
-        stopNearbySession()
     }
 
     @objc public func isAvailable(_ call: CAPPluginCall) { call.resolve(["available": true]) }

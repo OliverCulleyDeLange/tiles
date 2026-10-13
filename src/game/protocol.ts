@@ -159,7 +159,11 @@ export function sanitizeRoom(raw: unknown): string {
 export function sanitizeBoard(raw: unknown, allowed: Set<string>): PlacedTile[] | null {
   const board = sanitizeLayout(raw, allowed);
   if (!board || board.length !== allowed.size) return null;
-  if (board.length < 2) return board;
+  return boardIsConnected(board) ? board : null;
+}
+
+export function boardIsConnected(board: PlacedTile[]): boolean {
+  if (board.length < 2) return true;
   const cells = new Set(board.map(tile => `${tile.x},${tile.y}`));
   const reached = new Set<string>();
   const queue = [cells.values().next().value as string];
@@ -172,7 +176,7 @@ export function sanitizeBoard(raw: unknown, allowed: Set<string>): PlacedTile[] 
       if (cells.has(next) && !reached.has(next)) queue.push(next);
     }
   }
-  return reached.size === board.length ? board : null;
+  return reached.size === board.length;
 }
 
 export function sanitizeLayout(raw: unknown, allowed: Set<string>): PlacedTile[] | null {

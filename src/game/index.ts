@@ -200,7 +200,6 @@ export function createTiles(root: HTMLElement): void {
   let nearbyHomeGeneration = 0;
   let nearbyName = '';
   let nearbyTransportStarting = false;
-  let nearbySuspendStop: Promise<void> | null = null;
   let nearbyPermissionAliases: string[] | undefined;
   const selectedNearbyIds = new Set<string>();
   const outgoingNearbyInvites = new Set<string>();
@@ -233,7 +232,6 @@ export function createTiles(root: HTMLElement): void {
   let nearbyHomeRestart: Promise<void> | null = null;
   let nameChangeTimer: number | null = null;
   let nearbyHomePhase: 'idle' | 'permission' | 'permission-required' | 'starting' | 'visible' | 'searching' | 'failed' = 'idle';
-  let nearbySuspended = false;
   let pendingNearbyInvite: NearbyVerification | null = null;
   let transportSend: ((message: object) => void) | null = null;
   let myId = '';
@@ -393,12 +391,12 @@ export function createTiles(root: HTMLElement): void {
     try {
       const value = JSON.parse(localStorage.getItem(LOCAL_SESSION_KEY) ?? 'null') as Partial<SavedLocalSession> | null;
       if (!value || value.version !== 1 || value.role !== 'participant') return null;
-      const name = sanitizeName(value.name);
-      const hostName = sanitizeName(value.hostName);
+      const name = nearbyDisplayName(value.name);
+      const hostName = nearbyDisplayName(value.hostName);
       if (!name || !hostName || !['lobby', 'playing', 'review', 'finished'].includes(value.phase ?? '')) return null;
       return {
         version: 1, role: 'participant', name, hostName,
-        playerNames: Array.isArray(value.playerNames) ? value.playerNames.map(sanitizeName).filter(Boolean).slice(0, 8) : [],
+        playerNames: Array.isArray(value.playerNames) ? value.playerNames.map(nearbyDisplayName).filter(Boolean).slice(0, 8) : [],
         phase: value.phase as RoomSnapshot['phase'], updatedAt: typeof value.updatedAt === 'number' ? value.updatedAt : 0,
       };
     } catch {
@@ -578,16 +576,34 @@ export function createTiles(root: HTMLElement): void {
   const nearbyWireName = (name = nearbyName): string =>
     `tiles7|${selectedPlayerColor().slice(1)}|${nearbyDeviceId}|${nearbyPlatform}|${[...nearbyInvitationTargets].join(',')}|${sanitizeName(name)}`;
 
+  function nearbyDisplayName(raw: unknown): string {
+    const value = typeof raw === 'string' ? raw : '';
+    const fields = value.split('|');
+    return /^tiles\d+$/.test(fields[0] ?? '')
+      ? sanitizeName(fields.slice(5).join('|')) || 'Nearby player'
+      : sanitizeName(value);
+  }
+
   function decodeNearbyEndpoint<T extends NearbyEndpoint>(endpoint: T): T {
-    const match = /^tiles7\|([0-9a-f]{6})\|([0-9a-f]{8})\|([ia])\|([0-9a-f,]*)\|(.+)$/i.exec(endpoint.name);
-    if (!match) return endpoint;
+    // Native Nearby implementations may truncate long endpoint names (most
+    // commonly when an invitation list is present). Never expose our encoded
+    // transport identity as a player's display name.
+    const fields = endpoint.name.split('|');
+    if (!/^tiles\d+$/.test(fields[0] ?? '')) return { ...endpoint, name: nearbyDisplayName(endpoint.name) };
+    const color = /^[0-9a-f]{6}$/i.test(fields[1] ?? '') ? `#${fields[1].toLowerCase()}` : undefined;
+    const deviceId = /^[0-9a-f]{8}$/i.test(fields[2] ?? '') ? fields[2].toLowerCase() : undefined;
+    const platform = fields[3]?.toLowerCase() === 'i' ? 'ios'
+      : fields[3]?.toLowerCase() === 'a' ? 'android'
+      : undefined;
+    const inviteDeviceIds = (fields[4] ?? '').toLowerCase().split(',').filter(value => /^[0-9a-f]{8}$/.test(value));
+    const name = nearbyDisplayName(endpoint.name);
     return {
       ...endpoint,
-      name: sanitizeName(match[5]),
-      color: sanitizePlayerColor(`#${match[1].toLowerCase()}`),
-      deviceId: match[2].toLowerCase(),
-      platform: match[3].toLowerCase() === 'i' ? 'ios' : 'android',
-      inviteDeviceIds: match[4] ? match[4].toLowerCase().split(',') : [],
+      name,
+      color: color ? sanitizePlayerColor(color) : endpoint.color,
+      deviceId: deviceId ?? endpoint.deviceId,
+      platform: platform ?? endpoint.platform,
+      inviteDeviceIds,
     };
   }
 
@@ -1309,7 +1325,7 @@ export function createTiles(root: HTMLElement): void {
   }
 
   function scheduleNearbyTransport(delay?: number): void {
-    if (nearbySuspended || nearbyReconnectTimer != null
+    if (nearbyReconnectTimer != null
       || (connectionMode !== 'nearby-host' && connectionMode !== 'nearby-join')) return;
     const wait = delay ?? Math.min(8_000, 500 * 2 ** Math.min(nearbyReconnectAttempt++, 4));
     nearbyReconnectTimer = window.setTimeout(() => {
@@ -1319,7 +1335,7 @@ export function createTiles(root: HTMLElement): void {
   }
 
   async function resumeNearbyTransport(): Promise<void> {
-    if (nearbySuspended || nearbyTransportStarting
+    if (nearbyTransportStarting
       || (connectionMode !== 'nearby-host' && connectionMode !== 'nearby-join')) return;
     nearbyTransportStarting = true;
     try {
@@ -1334,7 +1350,7 @@ export function createTiles(root: HTMLElement): void {
       // Recreate the Nearby manager, not just its discoverer. iOS otherwise
       // retains the host's pre-background endpoint and may never emit it again.
       await NearbyConnections.stop().catch(error => diagnose('nearby-reconnect-stop-failed', nearbyErrorDetail(error)));
-      if (connectionMode !== 'nearby-join' || nearbySuspended || nearbyHostId) return;
+      if (connectionMode !== 'nearby-join' || nearbyHostId) return;
       nearbyConnectingId = null;
       await NearbyConnections.startDiscovery({ name: nearbyWireName() });
       nearbyAutoReconnect = true;
@@ -3865,24 +3881,13 @@ export function createTiles(root: HTMLElement): void {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
       if (isNativeNearby() && (connectionMode === 'nearby-host' || connectionMode === 'nearby-join')) {
-        nearbySuspended = true;
         diagnose('app-backgrounded', { connectionMode });
-        nearbySuspendStop = NearbyConnections.stop()
-          .catch(error => diagnose('background-stop-failed', nearbyErrorDetail(error)));
       }
       return;
     }
     flushChatReadReceipts();
-    if (nearbySuspended) {
-      nearbySuspended = false;
+    if (isNativeNearby() && (connectionMode === 'nearby-host' || connectionMode === 'nearby-join')) {
       diagnose('app-foregrounded', { connectionMode });
-      const stopped = nearbySuspendStop;
-      nearbySuspendStop = null;
-      void (async () => {
-        await stopped;
-        await resumeNearbyTransport();
-      })();
-      return;
     }
     if (connectionMode === 'nearby-home') {
       void startNearbyHome();

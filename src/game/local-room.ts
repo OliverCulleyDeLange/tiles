@@ -1,8 +1,8 @@
 import {
   MAX_PLAYERS,
+  boardIsConnected,
   createPlayerAreas,
   isDictionaryId,
-  sanitizeBoard,
   sanitizeChatId,
   sanitizeChatText,
   sanitizeLayout,
@@ -398,9 +398,22 @@ export class LocalRoomHost {
       this.deliver(player.id, { t: 'peel-result', peel, accepted: false, reason: 'The game changed before that peel arrived.' });
       return;
     }
-    const board = sanitizeBoard(raw, new Set(player.hand.map(tile => tile.id)));
-    if (!board || this.overlapsAnother(player.id, board)) {
-      this.deliver(player.id, { t: 'peel-result', peel, accepted: false, reason: 'Your tiles must form one connected, non-overlapping grid.' });
+    const allowed = new Set(player.hand.map(tile => tile.id));
+    const board = sanitizeLayout(raw, allowed);
+    if (!board || board.length !== allowed.size) {
+      // A Nearby hand update can arrive immediately before an automatic peel.
+      // Refresh the authoritative hand instead of blaming the visible grid.
+      this.deliver(player.id, { t: 'hand', tiles: player.hand, replace: true });
+      this.deliver(player.id, { t: 'layout', playerId: player.id, board: player.board });
+      this.deliver(player.id, { t: 'peel-result', peel, accepted: false, reason: 'Your tiles changed while peeling. Your rack has been refreshed.' });
+      return;
+    }
+    if (!boardIsConnected(board)) {
+      this.deliver(player.id, { t: 'peel-result', peel, accepted: false, reason: 'Your tiles must form one connected grid.' });
+      return;
+    }
+    if (this.overlapsAnother(player.id, board)) {
+      this.deliver(player.id, { t: 'peel-result', peel, accepted: false, reason: 'Your grid overlaps another player’s tiles.' });
       return;
     }
     player.board = board;
